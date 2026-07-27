@@ -1,6 +1,6 @@
 {
   "name": "confluence-dc-advops-mcp",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "type": "module",
   "description": "Local Confluence DC MCP: reparent, file storage get/update, space template sync (proxy auth)",

@@ -22,6 +22,7 @@ Same sources as `@atlassian-dc-mcp/confluence`:
 | `confluence_updateStorageFromFile` | Publish page storage XML from file (auto version bump) |
 | `confluence_listSpaceTemplates` | List space page templates (`spaceKey` required) |
 | `confluence_getSpaceTemplateToFile` | Dump space template body to a local XML file |
+| `confluence_createSpaceTemplateFromFile` | Create new space template from file (POST) |
 | `confluence_updateSpaceTemplateFromFile` | Publish space template body from file |
 | `confluence_syncPageToSpaceTemplate` | **Fast path:** copy BSA page body → TempStream space template |
 

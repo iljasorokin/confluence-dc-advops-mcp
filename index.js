@@ -192,6 +192,57 @@ async function getSpaceTemplateToFile({ spaceKey, templateId, name, filePath }) 
   };
 }
 
+async function createSpaceTemplateFromFile({
+  spaceKey,
+  name,
+  filePath,
+  description = '',
+  labels = [],
+}) {
+  if (!existsSync(filePath)) throw new Error(`File not found: ${filePath}`);
+  const storage = readFileSync(filePath, 'utf8');
+  if (!storage.trim()) throw new Error(`File is empty: ${filePath}`);
+
+  const existing = await listSpaceTemplates(spaceKey, { nameContains: name });
+  const clash = existing.find((t) => t.name === name);
+  if (clash) {
+    throw new Error(
+      `Space template already exists in ${spaceKey}: id=${clash.templateId} name=${clash.name}`,
+    );
+  }
+
+  const payload = {
+    name,
+    description: description || '',
+    templateType: 'page',
+    space: { key: spaceKey },
+    body: {
+      storage: {
+        value: storage,
+        representation: 'storage',
+      },
+    },
+  };
+  if (labels.length) {
+    payload.labels = labels.map((l) =>
+      typeof l === 'string' ? { prefix: 'global', name: l } : { prefix: l.prefix || 'global', name: l.name },
+    );
+  }
+
+  const created = await confluenceApi('POST', '/rest/experimental/template', payload);
+  const createdStorage = templateStorage(created) || storage;
+  return {
+    templateId: String(created.templateId),
+    name: created.name || name,
+    spaceKey,
+    description: created.description ?? description,
+    labels: (created.labels || payload.labels || []).map((l) => l.name || l),
+    bodyChars: storage.length,
+    bodySha256: sha256(storage),
+    matchedSha256: sha256(createdStorage) === sha256(storage),
+  };
+}
+
 async function updateSpaceTemplateFromFile({
   spaceKey,
   templateId,
@@ -445,7 +496,7 @@ function fail(error) {
 
 const server = new McpServer({
   name: 'confluence-dc-advops-mcp',
-  version: '1.2.0',
+  version: '1.2.1',
 });
 
 server.tool(
@@ -599,6 +650,33 @@ server.tool(
         throw new Error('Provide templateId and/or name');
       }
       return ok(await getSpaceTemplateToFile(args));
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+server.tool(
+  'confluence_createSpaceTemplateFromFile',
+  'Create a new space page template from a local storage XML file via POST /rest/experimental/template. Use after a new BSA заготовка exists and needs a TempStream Create-from-template entry. Fails if a template with the same name already exists.',
+  {
+    spaceKey: z.string().describe('Space key, e.g. TempStream'),
+    name: z.string().describe('New template name, e.g. SRS-XXX-DB-01 Модель данных'),
+    filePath: z.string().describe('Absolute path to storage XML (usually dumped from BSA page)'),
+    description: z.string().optional().describe('Template description shown in Create from template'),
+    labels: z
+      .array(z.string())
+      .optional()
+      .describe('Optional label names (global prefix)'),
+  },
+  async (args) => {
+    try {
+      return ok(
+        await createSpaceTemplateFromFile({
+          ...args,
+          labels: args.labels || [],
+        }),
+      );
     } catch (error) {
       return fail(error);
     }
