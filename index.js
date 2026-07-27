@@ -3,7 +3,7 @@
  * Local Confluence DC helpers for Cursor:
  * - move/reparent pages (until upstream parentId lands)
  * - dump/update page storage from/to a local file (large templates without stuffing XML into chat)
- * - list / dump / update space page templates (TempStream Create from template)
+ * - list / dump / create / update / delete space page templates (TempStream Create from template)
  * - sync BSA page → space template in one call
  *
  * Auth/host: same as @atlassian-dc-mcp/confluence (proxy localhost:8443 + keychain token).
@@ -258,7 +258,8 @@ async function updateSpaceTemplateFromFile({
   const current = await findSpaceTemplate({
     spaceKey,
     templateId,
-    name,
+    // When renaming, `name` is the *new* title — do not use it as list filter.
+    name: templateId ? undefined : name,
     expandBody: false,
   });
 
@@ -294,6 +295,106 @@ async function updateSpaceTemplateFromFile({
     bodySha256: sha256(storage),
     responseName: updated?.name,
     matchedSha256: sha256(updatedStorage) === sha256(storage),
+  };
+}
+
+/** Exact phrase the human must authorize in chat before the agent may pass confirm. */
+const DELETE_CONFIRM_PHRASE = 'DELETE';
+
+function assertDeleteConfirm(confirm) {
+  if (confirm !== DELETE_CONFIRM_PHRASE) {
+    throw new Error(
+      `Refusing to delete: confirm must be the exact string "${DELETE_CONFIRM_PHRASE}" ` +
+        '(destructive; no trash restore). Ask the human in chat first; do not invent confirmation.',
+    );
+  }
+}
+
+async function deleteSpaceTemplate({
+  spaceKey,
+  templateId,
+  name,
+  confirm,
+  confirmName,
+}) {
+  assertDeleteConfirm(confirm);
+  if (!templateId && !name) {
+    throw new Error('Provide templateId and/or name');
+  }
+  if (typeof confirmName !== 'string' || !confirmName.trim()) {
+    throw new Error(
+      'Refusing to delete: confirmName is required and must exactly equal the template name ' +
+        '(copy from listSpaceTemplates after the human approved deletion in chat).',
+    );
+  }
+
+  const current = await findSpaceTemplate({
+    spaceKey,
+    templateId,
+    name,
+    expandBody: false,
+  });
+  if (current.name !== confirmName) {
+    throw new Error(
+      `Refusing to delete: confirmName "${confirmName}" does not exactly match template name "${current.name}" ` +
+        `(id=${current.templateId}). Re-list and get human approval for the exact name.`,
+    );
+  }
+  const id = String(current.templateId);
+
+  // DC: DELETE /rest/experimental/template/{contentTemplateId} → 204 No Content
+  await confluenceApi('DELETE', `/rest/experimental/template/${id}`);
+
+  return {
+    deleted: true,
+    templateId: id,
+    name: current.name,
+    spaceKey: spaceKey || current.space?.key || null,
+    description: current.description || '',
+    labels: (current.labels || []).map((l) => l.name || l),
+  };
+}
+
+async function deleteSpaceTemplates({ spaceKey, templateIds, confirm, confirmNames }) {
+  assertDeleteConfirm(confirm);
+  if (!Array.isArray(templateIds) || templateIds.length === 0) {
+    throw new Error('Provide non-empty templateIds array');
+  }
+  if (!Array.isArray(confirmNames) || confirmNames.length !== templateIds.length) {
+    throw new Error(
+      'Refusing to delete: confirmNames must be an array of exact template names, ' +
+        'same length and order as templateIds (after human approval in chat).',
+    );
+  }
+
+  const results = [];
+  for (let i = 0; i < templateIds.length; i++) {
+    const tid = templateIds[i];
+    try {
+      results.push(
+        await deleteSpaceTemplate({
+          spaceKey,
+          templateId: String(tid),
+          confirm: DELETE_CONFIRM_PHRASE,
+          confirmName: confirmNames[i],
+        }),
+      );
+    } catch (error) {
+      results.push({
+        deleted: false,
+        templateId: String(tid),
+        spaceKey,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return {
+    spaceKey,
+    requested: templateIds.length,
+    deleted: results.filter((r) => r.deleted).length,
+    failed: results.filter((r) => !r.deleted).length,
+    results,
   };
 }
 
@@ -685,7 +786,7 @@ server.tool(
 
 server.tool(
   'confluence_updateSpaceTemplateFromFile',
-  'Update a space page template body from a local storage XML file via PUT /rest/experimental/template. Preserves labels by default. BSA page remains source of truth — this publishes a snapshot for Create from template.',
+  'Update a space page template body from a local storage XML file via PUT /rest/experimental/template. Preserves labels by default. BSA page remains source of truth — this publishes a snapshot for Create from template. To rename: pass templateId + new `name` (id alone is used for lookup).',
   {
     spaceKey: z.string().describe('Space key, e.g. TempStream'),
     templateId: z.string().optional().describe('Space template ID'),
@@ -726,6 +827,69 @@ server.tool(
         throw new Error('Provide templateId and/or name');
       }
       return ok(await syncPageToSpaceTemplate(args));
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+server.tool(
+  'confluence_deleteSpaceTemplate',
+  'DESTRUCTIVE. Delete one TempStream/space Create template (DELETE /rest/experimental/template/{id}). ALWAYS stop and get explicit human approval in chat first — never invent confirm. Requires confirm="DELETE" and confirmName=exact template name. No trash restore; archive dump first.',
+  {
+    spaceKey: z.string().describe('Space key, e.g. TempStream'),
+    templateId: z.string().optional().describe('Space template ID to delete'),
+    name: z.string().optional().describe('Template name or substring if id unknown'),
+    confirm: z
+      .literal('DELETE')
+      .describe('Pass only after human approved in this chat. Exact string DELETE (not true/yes).'),
+    confirmName: z
+      .string()
+      .describe('Exact template name from listSpaceTemplates; must match the resolved template or delete is refused'),
+  },
+  {
+    title: 'Delete space template (needs human confirm)',
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
+  async (args) => {
+    try {
+      return ok(await deleteSpaceTemplate(args));
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+server.tool(
+  'confluence_deleteSpaceTemplates',
+  'DESTRUCTIVE. Delete several space Create templates by id. ALWAYS get explicit human approval in chat first. Requires confirm="DELETE" and confirmNames[] exact names (same order as templateIds). Continues on per-item errors. Archive dump first.',
+  {
+    spaceKey: z.string().describe('Space key, e.g. TempStream'),
+    templateIds: z
+      .array(z.string())
+      .min(1)
+      .describe('Template IDs to delete, e.g. ["104005670","110428188"]'),
+    confirm: z
+      .literal('DELETE')
+      .describe('Pass only after human approved in this chat. Exact string DELETE (not true/yes).'),
+    confirmNames: z
+      .array(z.string())
+      .min(1)
+      .describe('Exact template names, same length/order as templateIds'),
+  },
+  {
+    title: 'Delete space templates batch (needs human confirm)',
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
+  async (args) => {
+    try {
+      return ok(await deleteSpaceTemplates(args));
     } catch (error) {
       return fail(error);
     }

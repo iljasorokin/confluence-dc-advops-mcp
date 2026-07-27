@@ -25,6 +25,7 @@ Same sources as `@atlassian-dc-mcp/confluence`:
 | `confluence_createSpaceTemplateFromFile` | Create new space template from file (POST) |
 | `confluence_updateSpaceTemplateFromFile` | Publish space template body from file |
 | `confluence_syncPageToSpaceTemplate` | **Fast path:** copy BSA page body → TempStream space template |
+| `confluence_deleteSpaceTemplate` / `…Templates` | **Destructive.** Delete Create template(s). Requires human chat OK + `confirm: "DELETE"` + exact name(s). Annotated `destructiveHint`. |
 
 ### Fast path for large BSA pages (BRD/SRS/…)
 
@@ -54,6 +55,7 @@ DC notes:
 - List: `/rest/experimental/template/page?spaceKey=…`
 - GET by template id alone often **404** — always pass `spaceKey`
 - Update: `PUT /rest/experimental/template` with `templateType: "page"` and `body.storage`
+- Delete: `DELETE /rest/experimental/template/{id}` — only via MCP delete tools after **human** confirmation (`confirm: "DELETE"` + exact `confirmName` / `confirmNames`). No trash restore.
 
 ## Cursor config
 
