@@ -3,11 +3,14 @@
  * Local Confluence DC helpers for Cursor:
  * - move/reparent pages (until upstream parentId lands)
  * - dump/update page storage from/to a local file (large templates without stuffing XML into chat)
+ * - list / dump / update space page templates (TempStream Create from template)
+ * - sync BSA page → space template in one call
  *
  * Auth/host: same as @atlassian-dc-mcp/confluence (proxy localhost:8443 + keychain token).
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -87,8 +90,224 @@ async function confluenceApi(method, path, body) {
   return data;
 }
 
+function sha256(text) {
+  return createHash('sha256').update(text, 'utf8').digest('hex');
+}
+
+function templateStorage(template) {
+  return template?.body?.storage?.value ?? template?.body?.value ?? null;
+}
+
+function summarizeTemplate(t, { includeBodyHash = false } = {}) {
+  const storage = templateStorage(t);
+  const out = {
+    templateId: String(t.templateId),
+    name: t.name,
+    description: t.description || '',
+    templateType: t.templateType,
+    spaceKey: t.space?.key,
+    labels: (t.labels || []).map((l) => l.name),
+    bodyChars: storage ? storage.length : undefined,
+  };
+  if (includeBodyHash && storage) out.bodySha256 = sha256(storage);
+  return out;
+}
+
 async function getPageMeta(contentId, expand = 'version,space,ancestors,body.storage') {
   return confluenceApi('GET', `/rest/api/content/${contentId}?expand=${expand}`);
+}
+
+async function listSpaceTemplates(spaceKey, { nameContains, expandBody = false, limit = 50 } = {}) {
+  const results = [];
+  let start = 0;
+  const expand = expandBody ? 'body' : undefined;
+  for (;;) {
+    const qs = new URLSearchParams({
+      spaceKey,
+      limit: String(limit),
+      start: String(start),
+    });
+    if (expand) qs.set('expand', expand);
+    const data = await confluenceApi(
+      'GET',
+      `/rest/experimental/template/page?${qs.toString()}`,
+    );
+    const batch = data.results || [];
+    for (const t of batch) {
+      if (nameContains && !String(t.name).toLowerCase().includes(String(nameContains).toLowerCase())) {
+        continue;
+      }
+      results.push(t);
+    }
+    const total = data.totalSize ?? start + batch.length;
+    start += data.size ?? batch.length;
+    if (!batch.length || start >= total) break;
+    if (start > 1000) break;
+  }
+  return results;
+}
+
+async function findSpaceTemplate({ spaceKey, templateId, name, expandBody = false }) {
+  if (!spaceKey) throw new Error('spaceKey is required (GET by id alone returns 404 on DC)');
+  const all = await listSpaceTemplates(spaceKey, {
+    nameContains: name,
+    expandBody,
+  });
+  let hit;
+  if (templateId) {
+    hit = all.find((t) => String(t.templateId) === String(templateId));
+  } else if (name) {
+    hit = all.find((t) => t.name === name) || all.find((t) => t.name.includes(name));
+  }
+  if (!hit) {
+    throw new Error(
+      `Space template not found in ${spaceKey}` +
+        (templateId ? ` id=${templateId}` : '') +
+        (name ? ` name~${name}` : ''),
+    );
+  }
+  if (expandBody && !templateStorage(hit)) {
+    // list without expand then with expand+filter can miss; refetch with expand
+    const withBody = await listSpaceTemplates(spaceKey, {
+      nameContains: hit.name,
+      expandBody: true,
+    });
+    hit = withBody.find((t) => String(t.templateId) === String(hit.templateId)) || hit;
+  }
+  return hit;
+}
+
+async function getSpaceTemplateToFile({ spaceKey, templateId, name, filePath }) {
+  const t = await findSpaceTemplate({ spaceKey, templateId, name, expandBody: true });
+  const storage = templateStorage(t);
+  if (typeof storage !== 'string') {
+    throw new Error(`No storage body for template ${t.templateId} (${t.name})`);
+  }
+  mkdirSync(dirname(filePath), { recursive: true });
+  writeFileSync(filePath, storage, 'utf8');
+  return {
+    ...summarizeTemplate(t, { includeBodyHash: true }),
+    filePath,
+    bytes: Buffer.byteLength(storage, 'utf8'),
+  };
+}
+
+async function updateSpaceTemplateFromFile({
+  spaceKey,
+  templateId,
+  name,
+  filePath,
+  description,
+  keepLabels = true,
+}) {
+  if (!existsSync(filePath)) throw new Error(`File not found: ${filePath}`);
+  const storage = readFileSync(filePath, 'utf8');
+  if (!storage.trim()) throw new Error(`File is empty: ${filePath}`);
+
+  const current = await findSpaceTemplate({
+    spaceKey,
+    templateId,
+    name,
+    expandBody: false,
+  });
+
+  const payload = {
+    templateId: String(current.templateId),
+    name: name || current.name,
+    description: description ?? current.description ?? '',
+    templateType: current.templateType || 'page',
+    space: { key: spaceKey || current.space?.key },
+    body: {
+      storage: {
+        value: storage,
+        representation: 'storage',
+      },
+    },
+  };
+  if (keepLabels && current.labels?.length) {
+    payload.labels = current.labels.map((l) => ({
+      prefix: l.prefix || 'global',
+      name: l.name,
+    }));
+  }
+
+  const updated = await confluenceApi('PUT', '/rest/experimental/template', payload);
+  const updatedStorage = templateStorage(updated) || storage;
+  return {
+    templateId: String(current.templateId),
+    name: payload.name,
+    spaceKey: payload.space.key,
+    description: payload.description,
+    labels: payload.labels?.map((l) => l.name) || [],
+    bodyChars: storage.length,
+    bodySha256: sha256(storage),
+    responseName: updated?.name,
+    matchedSha256: sha256(updatedStorage) === sha256(storage),
+  };
+}
+
+async function syncPageToSpaceTemplate({
+  contentId,
+  spaceKey,
+  templateId,
+  name,
+  description,
+  descriptionSuffix,
+}) {
+  const page = await getPageMeta(contentId, 'version,space,body.storage,title');
+  const storage = page.body?.storage?.value;
+  if (typeof storage !== 'string') {
+    throw new Error(`No body.storage on page ${contentId}`);
+  }
+
+  const current = await findSpaceTemplate({
+    spaceKey,
+    templateId,
+    name,
+    expandBody: false,
+  });
+
+  let desc = description;
+  if (desc === undefined) {
+    desc = current.description || '';
+    if (descriptionSuffix) {
+      const base = desc.replace(/\s*\(синхрон с BSA[^)]*\)\s*$/u, '').trim();
+      desc = `${base} ${descriptionSuffix}`.trim();
+    }
+  }
+
+  const payload = {
+    templateId: String(current.templateId),
+    name: current.name,
+    description: desc,
+    templateType: current.templateType || 'page',
+    space: { key: spaceKey || current.space?.key },
+    labels: (current.labels || []).map((l) => ({
+      prefix: l.prefix || 'global',
+      name: l.name,
+    })),
+    body: {
+      storage: {
+        value: storage,
+        representation: 'storage',
+      },
+    },
+  };
+
+  const updated = await confluenceApi('PUT', '/rest/experimental/template', payload);
+  const updatedStorage = templateStorage(updated) || storage;
+  return {
+    sourcePageId: String(contentId),
+    sourceTitle: page.title,
+    sourceVersion: page.version.number,
+    templateId: String(current.templateId),
+    templateName: current.name,
+    spaceKey: payload.space.key,
+    description: desc,
+    bodyChars: storage.length,
+    bodySha256: sha256(storage),
+    matchedSha256: sha256(updatedStorage) === sha256(storage),
+  };
 }
 
 async function movePage(contentId, parentId, versionComment) {
@@ -226,7 +445,7 @@ function fail(error) {
 
 const server = new McpServer({
   name: 'confluence-move-mcp',
-  version: '1.1.0',
+  version: '1.2.0',
 });
 
 server.tool(
@@ -331,6 +550,104 @@ server.tool(
   async (args) => {
     try {
       return ok(await updateStorageFromFile(args));
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+server.tool(
+  'confluence_listSpaceTemplates',
+  'List space page templates via /rest/experimental/template/page (DC). Use spaceKey=TempStream for ДРП Create from template. Optional nameContains filter. Does not expand body by default (fast).',
+  {
+    spaceKey: z.string().describe('Space key, e.g. TempStream'),
+    nameContains: z.string().optional().describe('Case-insensitive substring filter on template name'),
+    expandBody: z
+      .boolean()
+      .optional()
+      .describe('If true, expand body (slow). Default false.'),
+  },
+  async ({ spaceKey, nameContains, expandBody }) => {
+    try {
+      const list = await listSpaceTemplates(spaceKey, {
+        nameContains,
+        expandBody: Boolean(expandBody),
+      });
+      return ok({
+        spaceKey,
+        count: list.length,
+        templates: list.map((t) => summarizeTemplate(t, { includeBodyHash: Boolean(expandBody) })),
+      });
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+server.tool(
+  'confluence_getSpaceTemplateToFile',
+  'Download a space page template body.storage to a local XML file. Requires spaceKey (GET by id alone 404s on DC). Identify by templateId and/or exact/partial name.',
+  {
+    spaceKey: z.string().describe('Space key, e.g. TempStream'),
+    templateId: z.string().optional().describe('Space template ID, e.g. 227016711 for CR-XXX-BRD'),
+    name: z.string().optional().describe('Template name or substring, e.g. CR-XXX-BRD'),
+    filePath: z.string().describe('Absolute path to write storage XML'),
+  },
+  async (args) => {
+    try {
+      if (!args.templateId && !args.name) {
+        throw new Error('Provide templateId and/or name');
+      }
+      return ok(await getSpaceTemplateToFile(args));
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+server.tool(
+  'confluence_updateSpaceTemplateFromFile',
+  'Update a space page template body from a local storage XML file via PUT /rest/experimental/template. Preserves labels by default. BSA page remains source of truth — this publishes a snapshot for Create from template.',
+  {
+    spaceKey: z.string().describe('Space key, e.g. TempStream'),
+    templateId: z.string().optional().describe('Space template ID'),
+    name: z.string().optional().describe('Template name (used to find and/or rename)'),
+    filePath: z.string().describe('Absolute path to storage XML'),
+    description: z.string().optional().describe('New description; default keep current'),
+    keepLabels: z.boolean().optional().describe('Keep existing labels (default true)'),
+  },
+  async (args) => {
+    try {
+      if (!args.templateId && !args.name) {
+        throw new Error('Provide templateId and/or name');
+      }
+      return ok(await updateSpaceTemplateFromFile(args));
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+server.tool(
+  'confluence_syncPageToSpaceTemplate',
+  'Fast path: copy body.storage from a BSA/page contentId into a TempStream space template (Create from template snapshot). Example: contentId=259706536 (Заготовка BRD) → templateId=227016711 (CR-XXX-BRD) spaceKey=TempStream.',
+  {
+    contentId: z.string().describe('Source page ID (BSA заготовка)'),
+    spaceKey: z.string().describe('Target space key, usually TempStream'),
+    templateId: z.string().optional().describe('Target space template ID'),
+    name: z.string().optional().describe('Target template name if id unknown'),
+    description: z.string().optional().describe('Replace template description entirely'),
+    descriptionSuffix: z
+      .string()
+      .optional()
+      .describe('Append/replace trailing sync note, e.g. "(синхрон с BSA 2.25: хаб + дети US)"'),
+  },
+  async (args) => {
+    try {
+      if (!args.templateId && !args.name) {
+        throw new Error('Provide templateId and/or name');
+      }
+      return ok(await syncPageToSpaceTemplate(args));
     } catch (error) {
       return fail(error);
     }
