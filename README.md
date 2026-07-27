@@ -1,8 +1,10 @@
 # confluence-move-mcp
 
-Temporary MCP server that moves (reparents) Confluence Data Center pages.
+Local MCP helpers for Confluence Data Center used from Cursor.
 
-Use while waiting for upstream [`parentId` on `confluence_updateContent`](https://github.com/b1ff/atlassian-dc-mcp/pull/67). After that lands, this server can be removed from `~/.cursor/mcp.json`.
+Talks to the **same proxy/auth** as `@atlassian-dc-mcp/confluence`
+(`CONFLUENCE_HOST=https://localhost:8443` + token from keychain). Prefer these
+tools over inventing raw `curl` to `cnfl.upzero.net`.
 
 ## Auth
 
@@ -13,8 +15,21 @@ Same sources as `@atlassian-dc-mcp/confluence`:
 
 ## Tools
 
-- `confluence_movePage` — move one page under a new parent
-- `confluence_movePages` — move several pages (sequential)
+| Tool | When |
+|------|------|
+| `confluence_movePage` / `confluence_movePages` | Reparent only (until upstream `parentId` on update) |
+| `confluence_getStorageToFile` | Dump `body.storage` to a local XML file (+ current version) |
+| `confluence_updateStorageFromFile` | Publish storage XML from file (auto version bump) |
+
+### Fast path for large templates (BRD/SRS/…)
+
+1. `confluence_getStorageToFile` → `_tmp_….xml`
+2. Surgical edit with Python/`StrReplace` on the file (preserve entities; do not re-escape)
+3. `confluence_updateStorageFromFile` (omit `version` to auto-bump, or pass current+1)
+4. Verify with `user-confluence-dc` / `confluence_getContent` `bodyMode: text`
+5. Delete the temp file
+
+For **small** pages, keep using `user-confluence-dc` `confluence_updateContent` directly.
 
 ## Cursor config
 
@@ -28,3 +43,5 @@ Same sources as `@atlassian-dc-mcp/confluence`:
   }
 }
 ```
+
+After changing `index.js`, reload MCP servers in Cursor so new tools appear.

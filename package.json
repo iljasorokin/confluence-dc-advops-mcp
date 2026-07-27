@@ -1,9 +1,9 @@
 {
   "name": "confluence-move-mcp",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
-  "description": "Temporary MCP: move/reparent Confluence DC pages (until upstream parentId lands)",
+  "description": "Local Confluence DC MCP: reparent pages + get/update storage from file (proxy auth)",
   "bin": {
     "confluence-move-mcp": "./index.js"
   },
