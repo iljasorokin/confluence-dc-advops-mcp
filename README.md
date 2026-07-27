@@ -1,4 +1,4 @@
-# confluence-move-mcp
+# confluence-dc-advops-mcp
 
 Local MCP helpers for Confluence Data Center used from Cursor.
 
@@ -57,9 +57,9 @@ DC notes:
 ## Cursor config
 
 ```json
-"confluence-move": {
+"confluence-dc-advops": {
   "command": "node",
-  "args": ["/Users/iljasorokin/confluence-move-mcp/index.js"],
+  "args": ["/Users/iljasorokin/confluence-dc-advops-mcp/index.js"],
   "env": {
     "CONFLUENCE_HOST": "https://localhost:8443",
     "NODE_TLS_REJECT_UNAUTHORIZED": "0"

@@ -1,11 +1,11 @@
 {
-  "name": "confluence-move-mcp",
+  "name": "confluence-dc-advops-mcp",
   "version": "1.2.0",
   "private": true,
   "type": "module",
   "description": "Local Confluence DC MCP: reparent, file storage get/update, space template sync (proxy auth)",
   "bin": {
-    "confluence-move-mcp": "./index.js"
+    "confluence-dc-advops-mcp": "./index.js"
   },
   "scripts": {
     "start": "node index.js"

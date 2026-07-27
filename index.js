@@ -403,7 +403,7 @@ async function updateStorageFromFile({
     space: { key: page.space.key },
     version: {
       number: nextVersion,
-      message: versionComment || 'Updated via confluence-move-mcp from file',
+      message: versionComment || 'Updated via confluence-dc-advops-mcp from file',
     },
     body: {
       storage: {
@@ -444,7 +444,7 @@ function fail(error) {
 }
 
 const server = new McpServer({
-  name: 'confluence-move-mcp',
+  name: 'confluence-dc-advops-mcp',
   version: '1.2.0',
 });
 
