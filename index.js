@@ -3,16 +3,16 @@
  * Local Confluence DC helpers for Cursor:
  * - move/reparent pages (until upstream parentId lands)
  * - dump/update page storage from/to a local file (large templates without stuffing XML into chat)
+ * - list / download / upload page attachments (binary via local file)
  * - list / dump / create / update / delete space page templates (TempStream Create from template)
  * - sync BSA page → space template in one call
  *
  * Auth/host: same as @atlassian-dc-mcp/confluence (proxy localhost:8443 + keychain token).
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, basename, join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -88,6 +88,27 @@ async function confluenceApi(method, path, body) {
     throw new Error(`${method} ${path} → ${res.status}: ${msg}`);
   }
   return data;
+}
+
+/** Binary/multipart fetch (no JSON Content-Type). Follows redirects. */
+async function confluenceFetchRaw(method, path, { headers = {}, body } = {}) {
+  const host = resolveHost();
+  const token = resolveToken();
+  const res = await fetch(`${host}${path}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'X-Atlassian-Token': 'no-check',
+      ...headers,
+    },
+    body,
+    redirect: 'follow',
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`${method} ${path} → ${res.status}: ${text.slice(0, 500)}`);
+  }
+  return res;
 }
 
 function sha256(text) {
@@ -582,6 +603,139 @@ async function updateStorageFromFile({
   };
 }
 
+function summarizeAttachment(att) {
+  const v = att.version || {};
+  const links = att._links || {};
+  return {
+    id: String(att.id),
+    title: att.title,
+    mediaType: att.metadata?.mediaType || att.extensions?.mediaType,
+    fileSize: att.extensions?.fileSize,
+    comment: att.metadata?.comment,
+    version: v.number,
+    when: v.when,
+    by: v.by?.displayName || v.by?.username,
+    downloadPath: links.download,
+    webui: links.webui,
+  };
+}
+
+async function listAttachments(contentId, { filename, limit = 50 } = {}) {
+  const results = [];
+  let start = 0;
+  for (;;) {
+    const qs = new URLSearchParams({
+      expand: 'version,container,metadata',
+      limit: String(limit),
+      start: String(start),
+    });
+    if (filename) qs.set('filename', filename);
+    const data = await confluenceApi(
+      'GET',
+      `/rest/api/content/${contentId}/child/attachment?${qs.toString()}`,
+    );
+    const batch = data.results || [];
+    results.push(...batch);
+    const total = data.totalSize ?? start + batch.length;
+    start += data.size ?? batch.length;
+    if (!batch.length || start >= total) break;
+    if (start > 500) break;
+  }
+  return results;
+}
+
+async function findAttachment({ contentId, attachmentId, filename }) {
+  if (attachmentId) {
+    const data = await confluenceApi(
+      'GET',
+      `/rest/api/content/${attachmentId}?expand=version,container,metadata,extensions`,
+    );
+    if (data.type !== 'attachment') {
+      throw new Error(`Content ${attachmentId} is not an attachment (type=${data.type})`);
+    }
+    return data;
+  }
+  if (!filename) throw new Error('Provide attachmentId and/or filename');
+  const list = await listAttachments(contentId, { filename });
+  const hit =
+    list.find((a) => a.title === filename) ||
+    list.find((a) => String(a.title).toLowerCase() === String(filename).toLowerCase());
+  if (!hit) {
+    throw new Error(`Attachment not found on page ${contentId}: ${filename}`);
+  }
+  return hit;
+}
+
+async function downloadAttachmentToFile({ contentId, attachmentId, filename, filePath }) {
+  const att = await findAttachment({ contentId, attachmentId, filename });
+  const id = String(att.id);
+  const pageId = contentId || att.container?.id || att.extensions?.containerId;
+  if (!pageId) throw new Error(`Cannot resolve parent page for attachment ${id}`);
+
+  // DC: /download/attachments/... works with Bearer; Cloud-style REST .../download often 404s.
+  let res;
+  const dl = att._links?.download;
+  if (dl) {
+    const path = dl.startsWith('http')
+      ? `${new URL(dl).pathname}${new URL(dl).search}`
+      : dl.startsWith('/')
+        ? dl
+        : `/${dl}`;
+    res = await confluenceFetchRaw('GET', path);
+  } else {
+    res = await confluenceFetchRaw(
+      'GET',
+      `/rest/api/content/${pageId}/child/attachment/${id}/download`,
+    );
+  }
+
+  const buf = Buffer.from(await res.arrayBuffer());
+  mkdirSync(dirname(filePath), { recursive: true });
+  writeFileSync(filePath, buf);
+  return {
+    ...summarizeAttachment(att),
+    contentId: String(pageId),
+    filePath,
+    bytes: buf.length,
+  };
+}
+
+async function uploadAttachmentFromFile({
+  contentId,
+  filePath,
+  comment,
+  minorEdit = true,
+  filename,
+}) {
+  if (!existsSync(filePath)) throw new Error(`File not found: ${filePath}`);
+  const name = filename || basename(filePath);
+  const buf = readFileSync(filePath);
+  const form = new FormData();
+  form.append('file', new Blob([buf]), name);
+  if (comment) form.append('comment', comment);
+  form.append('minorEdit', String(Boolean(minorEdit)));
+
+  const res = await confluenceFetchRaw(
+    'POST',
+    `/rest/api/content/${contentId}/child/attachment`,
+    { body: form },
+  );
+  const text = await res.text();
+  let data;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = { raw: text };
+  }
+  const created = data?.results?.[0] || data;
+  return {
+    contentId: String(contentId),
+    uploaded: summarizeAttachment(created),
+    bytes: buf.length,
+    filePath,
+  };
+}
+
 function ok(data) {
   return {
     content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
@@ -597,8 +751,75 @@ function fail(error) {
 
 const server = new McpServer({
   name: 'confluence-dc-advops-mcp',
-  version: '1.2.1',
+  version: '1.4.0',
 });
+
+server.tool(
+  'confluence_listAttachments',
+  'List attachments on a Confluence page (GET /rest/api/content/{id}/child/attachment). Optional exact filename filter.',
+  {
+    contentId: z.string().describe('Parent page ID'),
+    filename: z.string().optional().describe('Exact filename filter, e.g. onbording.zip'),
+  },
+  async ({ contentId, filename }) => {
+    try {
+      const list = await listAttachments(contentId, { filename });
+      return ok({
+        contentId,
+        count: list.length,
+        attachments: list.map(summarizeAttachment),
+      });
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+server.tool(
+  'confluence_downloadAttachmentToFile',
+  'Download a page attachment binary to a local file. Identify by attachmentId and/or filename on contentId. Prefer this over stuffing binaries into chat.',
+  {
+    contentId: z.string().describe('Parent page ID'),
+    attachmentId: z.string().optional().describe('Attachment content ID'),
+    filename: z.string().optional().describe('Attachment title/filename, e.g. onbording.zip'),
+    filePath: z.string().describe('Absolute local path to write the file'),
+  },
+  async (args) => {
+    try {
+      if (!args.attachmentId && !args.filename) {
+        throw new Error('Provide attachmentId and/or filename');
+      }
+      return ok(await downloadAttachmentToFile(args));
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+server.tool(
+  'confluence_uploadAttachmentFromFile',
+  'Upload (or add a new version of) a local file as a page attachment via multipart POST /rest/api/content/{id}/child/attachment. Sets X-Atlassian-Token: no-check.',
+  {
+    contentId: z.string().describe('Parent page ID'),
+    filePath: z.string().describe('Absolute path to the local file to upload'),
+    filename: z
+      .string()
+      .optional()
+      .describe('Override attachment title (default: basename of filePath)'),
+    comment: z.string().optional().describe('Attachment comment'),
+    minorEdit: z
+      .boolean()
+      .optional()
+      .describe('minorEdit flag (default true)'),
+  },
+  async (args) => {
+    try {
+      return ok(await uploadAttachmentFromFile(args));
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
 
 server.tool(
   'confluence_movePage',

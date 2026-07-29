@@ -20,6 +20,9 @@ Same sources as `@atlassian-dc-mcp/confluence`:
 | `confluence_movePage` / `confluence_movePages` | Reparent only (until upstream `parentId` on update) |
 | `confluence_getStorageToFile` | Dump page `body.storage` to a local XML file (+ current version) |
 | `confluence_updateStorageFromFile` | Publish page storage XML from file (auto version bump) |
+| `confluence_listAttachments` | List attachments on a page |
+| `confluence_downloadAttachmentToFile` | Download attachment binary to a local file |
+| `confluence_uploadAttachmentFromFile` | Upload / new version of attachment from local file |
 | `confluence_listSpaceTemplates` | List space page templates (`spaceKey` required) |
 | `confluence_getSpaceTemplateToFile` | Dump space template body to a local XML file |
 | `confluence_createSpaceTemplateFromFile` | Create new space template from file (POST) |
