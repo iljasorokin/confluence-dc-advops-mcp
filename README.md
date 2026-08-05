@@ -15,7 +15,7 @@ Same sources as `@atlassian-dc-mcp/confluence`:
 - `CONFLUENCE_HOST` (env or `~/.atlassian-dc-mcp/confluence.env`) — typically your local proxy, e.g. `https://localhost:8443`
 - `CONFLUENCE_API_TOKEN` (env), or macOS Keychain service `atlassian-dc-mcp` / account `confluence-token`
 
-Do **not** commit tokens or `*.env` files.
+Do **not** commit tokens or `*.env` files. See [SECURITY.md](./SECURITY.md).
 
 ## Tools
 
