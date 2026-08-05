@@ -2,6 +2,8 @@
 
 Local MCP helpers for Confluence Data Center used from Cursor.
 
+Русская документация: [README.ru.md](./README.ru.md).
+
 Talks to the **same proxy/auth** as `@atlassian-dc-mcp/confluence`
 (`CONFLUENCE_HOST=https://localhost:8443` + token from keychain). Prefer these
 tools over inventing raw `curl` to `cnfl.upzero.net`.
