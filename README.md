@@ -18,6 +18,9 @@ Same sources as `@atlassian-dc-mcp/confluence`:
 | Tool | When |
 |------|------|
 | `confluence_movePage` / `confluence_movePages` | Reparent only (until upstream `parentId` on update) |
+| `confluence_listChildPages` | Direct children + tree `position` |
+| `confluence_reorderPage` | Sibling order / append: `above` \| `below` \| `append` via DC `movepage.action` |
+| `confluence_setChildPageOrder` | Exact full child order (permutation; sequential movepage) |
 | `confluence_getStorageToFile` | Dump page `body.storage` to a local XML file (+ current version) |
 | `confluence_updateStorageFromFile` | Publish page storage XML from file (auto version bump) |
 | `confluence_listAttachments` | List attachments on a page |

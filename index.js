@@ -2,6 +2,7 @@
 /**
  * Local Confluence DC helpers for Cursor:
  * - move/reparent pages (until upstream parentId lands)
+ * - reorder sibling pages (DC UI movepage.action: above / below / append)
  * - dump/update page storage from/to a local file (large templates without stuffing XML into chat)
  * - list / download / upload page attachments (binary via local file)
  * - list / dump / create / update / delete space page templates (TempStream Create from template)
@@ -522,6 +523,197 @@ async function movePage(contentId, parentId, versionComment) {
   };
 }
 
+const REORDER_POSITIONS = new Set(['above', 'below', 'append']);
+
+/**
+ * DC 9.x has no public REST /content/{id}/move/... (Cloud-only).
+ * Sibling reorder uses the same endpoint as Space tools → Reorder pages:
+ * POST /pages/movepage.action?pageId=&targetId=&position=above|below|append
+ */
+async function movepageAction(contentId, targetId, position) {
+  if (!REORDER_POSITIONS.has(position)) {
+    throw new Error(`position must be one of: ${[...REORDER_POSITIONS].join(', ')}`);
+  }
+  const qs = new URLSearchParams({
+    pageId: String(contentId),
+    targetId: String(targetId),
+    position,
+  });
+  const host = resolveHost();
+  const token = resolveToken();
+  const res = await fetch(`${host}/pages/movepage.action?${qs}`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/json',
+      'X-Atlassian-Token': 'no-check',
+    },
+  });
+  const text = await res.text();
+  let data;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = { raw: text.slice(0, 500) };
+  }
+  if (!res.ok) {
+    const msg =
+      data?.errorMessage ||
+      data?.message ||
+      (Array.isArray(data?.actionErrors) ? data.actionErrors.join('; ') : null) ||
+      text.slice(0, 500);
+    throw new Error(`POST /pages/movepage.action → ${res.status}: ${msg}`);
+  }
+  if (Array.isArray(data?.actionErrors) && data.actionErrors.length) {
+    throw new Error(`movepage.action: ${data.actionErrors.join('; ')}`);
+  }
+  const delegate = data?.commandDelegate;
+  if (delegate && delegate.valid === false) {
+    const errs = (delegate.validationErrors || [])
+      .map((e) => e.message || e)
+      .join('; ');
+    throw new Error(`movepage.action invalid: ${errs || 'validation failed'}`);
+  }
+  if (delegate && delegate.authorized === false) {
+    throw new Error('movepage.action: not authorized');
+  }
+  return data;
+}
+
+async function listChildPages(parentId, { limit = 200 } = {}) {
+  const results = [];
+  let start = 0;
+  const pageLimit = Math.min(Number(limit) || 200, 200);
+  for (;;) {
+    const qs = new URLSearchParams({
+      limit: String(pageLimit),
+      start: String(start),
+      expand: 'extensions.position',
+    });
+    const data = await confluenceApi(
+      'GET',
+      `/rest/api/content/${parentId}/child/page?${qs}`,
+    );
+    const batch = data.results || [];
+    for (const c of batch) {
+      const pos = c.extensions?.position;
+      results.push({
+        id: String(c.id),
+        title: c.title,
+        position: pos === 'none' || pos === undefined ? null : pos,
+        status: c.status,
+        tinyui: c._links?.tinyui,
+        webui: c._links?.webui
+          ? `${resolveHost()}${c._links.webui}`
+          : undefined,
+      });
+    }
+    start += data.size ?? batch.length;
+    const total = data.totalSize ?? start;
+    if (!batch.length || start >= total || results.length >= limit) break;
+  }
+  return results.slice(0, limit);
+}
+
+async function reorderPage({ contentId, targetId, position }) {
+  if (String(contentId) === String(targetId) && position !== 'append') {
+    throw new Error('contentId and targetId must differ for above/below');
+  }
+  const [page, target] = await Promise.all([
+    getPageMeta(contentId, 'version,space,ancestors'),
+    getPageMeta(targetId, 'version,space,ancestors'),
+  ]);
+  await movepageAction(contentId, targetId, position);
+  const parentId =
+    position === 'append'
+      ? String(targetId)
+      : target.ancestors?.[target.ancestors.length - 1]?.id;
+  let children = [];
+  if (parentId) {
+    children = await listChildPages(parentId);
+  }
+  const index = children.findIndex((c) => c.id === String(contentId));
+  return {
+    id: String(contentId),
+    title: page.title,
+    targetId: String(targetId),
+    targetTitle: target.title,
+    position,
+    parentId: parentId ? String(parentId) : undefined,
+    index: index >= 0 ? index : undefined,
+    siblings: children.map((c) => ({
+      id: c.id,
+      title: c.title,
+      position: c.position,
+    })),
+  };
+}
+
+/**
+ * Set exact sibling order under parentId by sequential movepage above/below.
+ * childIds must list every direct child (same set as current children).
+ */
+async function setChildPageOrder({ parentId, childIds }) {
+  const desired = childIds.map(String);
+  if (new Set(desired).size !== desired.length) {
+    throw new Error('childIds must be unique');
+  }
+  const current = await listChildPages(parentId);
+  const currentIds = current.map((c) => c.id);
+  const missing = desired.filter((id) => !currentIds.includes(id));
+  const extra = currentIds.filter((id) => !desired.includes(id));
+  if (missing.length || extra.length) {
+    throw new Error(
+      `childIds must be a permutation of current children under ${parentId}` +
+        (missing.length ? `; not children: ${missing.join(',')}` : '') +
+        (extra.length ? `; omitted: ${extra.join(',')}` : ''),
+    );
+  }
+  if (currentIds.join(',') === desired.join(',')) {
+    return {
+      parentId: String(parentId),
+      changed: false,
+      reason: 'already in requested order',
+      children: current,
+    };
+  }
+
+  const steps = [];
+  // Place first page above whatever is currently first (if needed).
+  if (desired[0] !== currentIds[0]) {
+    await movepageAction(desired[0], currentIds[0], 'above');
+    steps.push({ contentId: desired[0], targetId: currentIds[0], position: 'above' });
+  }
+  for (let i = 1; i < desired.length; i++) {
+    const after = await listChildPages(parentId);
+    const afterIds = after.map((c) => c.id);
+    if (afterIds[i] === desired[i] && afterIds[i - 1] === desired[i - 1]) {
+      continue;
+    }
+    await movepageAction(desired[i], desired[i - 1], 'below');
+    steps.push({
+      contentId: desired[i],
+      targetId: desired[i - 1],
+      position: 'below',
+    });
+  }
+
+  const children = await listChildPages(parentId);
+  const okOrder = children.map((c) => c.id).join(',') === desired.join(',');
+  if (!okOrder) {
+    throw new Error(
+      `setChildPageOrder incomplete: got [${children.map((c) => c.id).join(',')}] ` +
+        `want [${desired.join(',')}]`,
+    );
+  }
+  return {
+    parentId: String(parentId),
+    changed: steps.length > 0,
+    steps,
+    children,
+  };
+}
+
 async function getStorageToFile(contentId, filePath) {
   const page = await getPageMeta(contentId);
   const storage = page.body?.storage?.value;
@@ -751,7 +943,7 @@ function fail(error) {
 
 const server = new McpServer({
   name: 'confluence-dc-advops-mcp',
-  version: '1.4.0',
+  version: '1.5.0',
 });
 
 server.tool(
@@ -882,6 +1074,73 @@ server.tool(
       failed: results.filter((r) => !r.ok).length,
       results,
     });
+  },
+);
+
+server.tool(
+  'confluence_listChildPages',
+  'List direct child pages of a parent with tree position (GET /rest/api/content/{id}/child/page?expand=extensions.position). Use before/after reorder.',
+  {
+    parentId: z.string().describe('Parent page ID'),
+    limit: z
+      .number()
+      .int()
+      .positive()
+      .max(500)
+      .optional()
+      .describe('Max children to return (default 200)'),
+  },
+  async ({ parentId, limit }) => {
+    try {
+      const children = await listChildPages(parentId, { limit });
+      return ok({
+        parentId: String(parentId),
+        count: children.length,
+        children,
+      });
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+server.tool(
+  'confluence_reorderPage',
+  'Change page order among siblings (or append under target). DC 9.x: POST /pages/movepage.action with position above|below|append. Prefer listChildPages first. above/below = same parent as target; append = become child of target.',
+  {
+    contentId: z.string().describe('Page ID to move in the tree'),
+    targetId: z.string().describe('Reference page ID'),
+    position: z
+      .enum(['above', 'below', 'append'])
+      .describe(
+        'above/below = sibling of target; append = child of target (reparent+last)',
+      ),
+  },
+  async (args) => {
+    try {
+      return ok(await reorderPage(args));
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+server.tool(
+  'confluence_setChildPageOrder',
+  'Set exact order of all direct children under a parent. childIds must be a full permutation of current children. Uses sequential movepage above/below (DC has no bulk REST). Prefer listChildPages first; ask human before large reorder.',
+  {
+    parentId: z.string().describe('Parent page whose children to reorder'),
+    childIds: z
+      .array(z.string())
+      .min(1)
+      .describe('Desired child page IDs from first to last (full set)'),
+  },
+  async (args) => {
+    try {
+      return ok(await setChildPageOrder(args));
+    } catch (error) {
+      return fail(error);
+    }
   },
 );
 
