@@ -3,8 +3,8 @@
 Локальные MCP-инструменты для Confluence Data Center в Cursor.
 
 Работает через **тот же proxy/auth**, что и `@atlassian-dc-mcp/confluence`
-(`CONFLUENCE_HOST=https://localhost:8443` + токен из Keychain). Предпочитать
-эти tools вместо ad-hoc `curl` к `cnfl.upzero.net`.
+(локальный TLS-proxy + токен из Keychain / env). Предпочитать эти tools
+вместо ad-hoc `curl` к публичному hostname Confluence.
 
 Английская версия: [README.md](./README.md).
 
@@ -12,8 +12,10 @@
 
 Те же источники, что у `@atlassian-dc-mcp/confluence`:
 
-- `CONFLUENCE_HOST` (env или `~/.atlassian-dc-mcp/confluence.env`)
+- `CONFLUENCE_HOST` (env или `~/.atlassian-dc-mcp/confluence.env`) — обычно локальный proxy, напр. `https://localhost:8443`
 - `CONFLUENCE_API_TOKEN` (env) или macOS Keychain: service `atlassian-dc-mcp` / account `confluence-token`
+
+Токены и `*.env` **не** коммитить.
 
 ## Tools
 
@@ -32,8 +34,8 @@
 | `confluence_getSpaceTemplateToFile` | Выгрузить тело space template в локальный XML |
 | `confluence_createSpaceTemplateFromFile` | Создать space template из файла (POST) |
 | `confluence_updateSpaceTemplateFromFile` | Обновить тело space template из файла |
-| `confluence_syncPageToSpaceTemplate` | **Быстрый путь:** тело BSA-страницы → space template TempStream |
-| `confluence_deleteSpaceTemplate` / `…Templates` | **Деструктивно.** Удаление Create-шаблона(ов). Нужно ОКное OK в чате + `confirm: "DELETE"` + точное имя/имена. `destructiveHint`. |
+| `confluence_syncPageToSpaceTemplate` | **Быстрый путь:** тело страницы → снимок Create-from-template |
+| `confluence_deleteSpaceTemplate` / `…Templates` | **Деструктивно.** Удаление Create-шаблона(ов). Нужно явное OK в чате + `confirm: "DELETE"` + точное имя/имена. `destructiveHint`. |
 
 ### Порядок страниц среди siblings (DC 9.x)
 
@@ -48,9 +50,9 @@ Cloud-эндпоинт `PUT /rest/api/content/{id}/move/...` на DC **отсу�
 
 Перед большим reorder — спросить человека в чате.
 
-### Быстрый путь для крупных BSA-страниц (BRD/SRS/…)
+### Быстрый путь для крупных страниц (BRD/SRS/…)
 
-1. `confluence_getStorageToFile` → `.tmp/….xml`
+1. `confluence_getStorageToFile` → локальный `….xml`
 2. Точечное правление файла (Python / `StrReplace`; сущности не переэкранировать)
 3. `confluence_updateStorageFromFile` (без `version` — автоинкремент, или передать current+1)
 4. Проверка через `user-confluence-dc` / `confluence_getContent` `bodyMode: text`
@@ -59,16 +61,16 @@ Cloud-эндпоинт `PUT /rest/api/content/{id}/move/...` на DC **отсу�
 
 Для **маленьких** страниц — `user-confluence-dc` `confluence_updateContent` напрямую.
 
-### Быстрый путь: BSA-заготовка → space template («Создать из шаблона»)
+### Быстрый путь: страница → space template («Создать из шаблона»)
 
-BSA-страница = источник истины. Space template в `TempStream` = снимок для «Создать из шаблона».
+Каталог / BSA-страница = источник истины. Space template = снимок для «Создать из шаблона».
 
 ```
 confluence_syncPageToSpaceTemplate
-  contentId: "259706536"          # Заготовка CR-XXX-BRD
-  spaceKey: "TempStream"
-  templateId: "227016711"         # CR-XXX-BRD
-  descriptionSuffix: "(синхрон с BSA 2.25: …)"   # optional
+  contentId: "<pageId>"
+  spaceKey: "<spaceKey>"
+  templateId: "<templateId>"
+  descriptionSuffix: "(примечание)"   # optional
 ```
 
 Замечания по DC API:
@@ -83,7 +85,7 @@ confluence_syncPageToSpaceTemplate
 ```json
 "confluence-dc-advops": {
   "command": "node",
-  "args": ["/Users/iljasorokin/confluence-dc-advops-mcp/index.js"],
+  "args": ["/path/to/confluence-dc-advops-mcp/index.js"],
   "env": {
     "CONFLUENCE_HOST": "https://localhost:8443",
     "NODE_TLS_REJECT_UNAUTHORIZED": "0"

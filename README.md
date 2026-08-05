@@ -5,15 +5,17 @@ Local MCP helpers for Confluence Data Center used from Cursor.
 Русская документация: [README.ru.md](./README.ru.md).
 
 Talks to the **same proxy/auth** as `@atlassian-dc-mcp/confluence`
-(`CONFLUENCE_HOST=https://localhost:8443` + token from keychain). Prefer these
-tools over inventing raw `curl` to `cnfl.upzero.net`.
+(local TLS proxy + token from keychain / env). Prefer these tools over
+ad-hoc `curl` to the public Confluence hostname.
 
 ## Auth
 
 Same sources as `@atlassian-dc-mcp/confluence`:
 
-- `CONFLUENCE_HOST` (env or `~/.atlassian-dc-mcp/confluence.env`)
+- `CONFLUENCE_HOST` (env or `~/.atlassian-dc-mcp/confluence.env`) — typically your local proxy, e.g. `https://localhost:8443`
 - `CONFLUENCE_API_TOKEN` (env), or macOS Keychain service `atlassian-dc-mcp` / account `confluence-token`
+
+Do **not** commit tokens or `*.env` files.
 
 ## Tools
 
@@ -32,12 +34,12 @@ Same sources as `@atlassian-dc-mcp/confluence`:
 | `confluence_getSpaceTemplateToFile` | Dump space template body to a local XML file |
 | `confluence_createSpaceTemplateFromFile` | Create new space template from file (POST) |
 | `confluence_updateSpaceTemplateFromFile` | Publish space template body from file |
-| `confluence_syncPageToSpaceTemplate` | **Fast path:** copy BSA page body → TempStream space template |
+| `confluence_syncPageToSpaceTemplate` | **Fast path:** copy page body → space Create-from-template snapshot |
 | `confluence_deleteSpaceTemplate` / `…Templates` | **Destructive.** Delete Create template(s). Requires human chat OK + `confirm: "DELETE"` + exact name(s). Annotated `destructiveHint`. |
 
-### Fast path for large BSA pages (BRD/SRS/…)
+### Fast path for large pages (BRD/SRS/…)
 
-1. `confluence_getStorageToFile` → `_tmp_….xml`
+1. `confluence_getStorageToFile` → local `….xml`
 2. Surgical edit with Python/`StrReplace` on the file (preserve entities; do not re-escape)
 3. `confluence_updateStorageFromFile` (omit `version` to auto-bump, or pass current+1)
 4. Verify with `user-confluence-dc` / `confluence_getContent` `bodyMode: text`
@@ -46,16 +48,16 @@ Same sources as `@atlassian-dc-mcp/confluence`:
 
 For **small** pages, keep using `user-confluence-dc` `confluence_updateContent` directly.
 
-### Fast path: BSA заготовка → space template (Create from template)
+### Fast path: page → space template (Create from template)
 
-BSA page = source of truth. Space template in `TempStream` = snapshot for «Создать из шаблона».
+Catalog / BSA page = source of truth. Space template = snapshot for «Create from template».
 
 ```
 confluence_syncPageToSpaceTemplate
-  contentId: "259706536"          # Заготовка CR-XXX-BRD
-  spaceKey: "TempStream"
-  templateId: "227016711"         # CR-XXX-BRD
-  descriptionSuffix: "(синхрон с BSA 2.25: …)"   # optional
+  contentId: "<pageId>"
+  spaceKey: "<spaceKey>"
+  templateId: "<templateId>"
+  descriptionSuffix: "(sync note)"   # optional
 ```
 
 DC notes:
@@ -70,7 +72,7 @@ DC notes:
 ```json
 "confluence-dc-advops": {
   "command": "node",
-  "args": ["/Users/iljasorokin/confluence-dc-advops-mcp/index.js"],
+  "args": ["/path/to/confluence-dc-advops-mcp/index.js"],
   "env": {
     "CONFLUENCE_HOST": "https://localhost:8443",
     "NODE_TLS_REJECT_UNAUTHORIZED": "0"

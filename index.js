@@ -5,10 +5,10 @@
  * - reorder sibling pages (DC UI movepage.action: above / below / append)
  * - dump/update page storage from/to a local file (large templates without stuffing XML into chat)
  * - list / download / upload page attachments (binary via local file)
- * - list / dump / create / update / delete space page templates (TempStream Create from template)
- * - sync BSA page → space template in one call
+ * - list / dump / create / update / delete space page templates (Create from template)
+ * - sync catalog page → space template in one call
  *
- * Auth/host: same as @atlassian-dc-mcp/confluence (proxy localhost:8443 + keychain token).
+ * Auth/host: same as @atlassian-dc-mcp/confluence (local TLS proxy + keychain token).
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname, basename, join } from 'node:path';
@@ -1151,7 +1151,7 @@ server.tool(
     contentId: z.string().describe('Confluence page ID'),
     filePath: z
       .string()
-      .describe('Absolute path to write storage XML (e.g. /Users/.../Betcity/_tmp_brd.xml)'),
+      .describe('Absolute path to write storage XML (e.g. /path/to/page.xml)'),
   },
   async ({ contentId, filePath }) => {
     try {
@@ -1190,9 +1190,9 @@ server.tool(
 
 server.tool(
   'confluence_listSpaceTemplates',
-  'List space page templates via /rest/experimental/template/page (DC). Use spaceKey=TempStream for ДРП Create from template. Optional nameContains filter. Does not expand body by default (fast).',
+  'List space page templates via /rest/experimental/template/page (DC). spaceKey required. Optional nameContains filter. Does not expand body by default (fast).',
   {
-    spaceKey: z.string().describe('Space key, e.g. TempStream'),
+    spaceKey: z.string().describe('Space key, e.g. MYSPACE'),
     nameContains: z.string().optional().describe('Case-insensitive substring filter on template name'),
     expandBody: z
       .boolean()
@@ -1220,8 +1220,8 @@ server.tool(
   'confluence_getSpaceTemplateToFile',
   'Download a space page template body.storage to a local XML file. Requires spaceKey (GET by id alone 404s on DC). Identify by templateId and/or exact/partial name.',
   {
-    spaceKey: z.string().describe('Space key, e.g. TempStream'),
-    templateId: z.string().optional().describe('Space template ID, e.g. 227016711 for CR-XXX-BRD'),
+    spaceKey: z.string().describe('Space key, e.g. MYSPACE'),
+    templateId: z.string().optional().describe('Space template ID'),
     name: z.string().optional().describe('Template name or substring, e.g. CR-XXX-BRD'),
     filePath: z.string().describe('Absolute path to write storage XML'),
   },
@@ -1239,11 +1239,11 @@ server.tool(
 
 server.tool(
   'confluence_createSpaceTemplateFromFile',
-  'Create a new space page template from a local storage XML file via POST /rest/experimental/template. Use after a new BSA заготовка exists and needs a TempStream Create-from-template entry. Fails if a template with the same name already exists.',
+  'Create a new space page template from a local storage XML file via POST /rest/experimental/template. Fails if a template with the same name already exists.',
   {
-    spaceKey: z.string().describe('Space key, e.g. TempStream'),
+    spaceKey: z.string().describe('Space key, e.g. MYSPACE'),
     name: z.string().describe('New template name, e.g. SRS-XXX-DB-01 Модель данных'),
-    filePath: z.string().describe('Absolute path to storage XML (usually dumped from BSA page)'),
+    filePath: z.string().describe('Absolute path to storage XML (usually dumped from source page)'),
     description: z.string().optional().describe('Template description shown in Create from template'),
     labels: z
       .array(z.string())
@@ -1266,9 +1266,9 @@ server.tool(
 
 server.tool(
   'confluence_updateSpaceTemplateFromFile',
-  'Update a space page template body from a local storage XML file via PUT /rest/experimental/template. Preserves labels by default. BSA page remains source of truth — this publishes a snapshot for Create from template. To rename: pass templateId + new `name` (id alone is used for lookup).',
+  'Update a space page template body from a local storage XML file via PUT /rest/experimental/template. Preserves labels by default. Source page remains SoT — this publishes a snapshot for Create from template. To rename: pass templateId + new `name` (id alone is used for lookup).',
   {
-    spaceKey: z.string().describe('Space key, e.g. TempStream'),
+    spaceKey: z.string().describe('Space key, e.g. MYSPACE'),
     templateId: z.string().optional().describe('Space template ID'),
     name: z.string().optional().describe('Template name (used to find and/or rename)'),
     filePath: z.string().describe('Absolute path to storage XML'),
@@ -1289,17 +1289,17 @@ server.tool(
 
 server.tool(
   'confluence_syncPageToSpaceTemplate',
-  'Fast path: copy body.storage from a BSA/page contentId into a TempStream space template (Create from template snapshot). Example: contentId=259706536 (Заготовка BRD) → templateId=227016711 (CR-XXX-BRD) spaceKey=TempStream.',
+  'Fast path: copy body.storage from a page contentId into a space template (Create from template snapshot).',
   {
-    contentId: z.string().describe('Source page ID (BSA заготовка)'),
-    spaceKey: z.string().describe('Target space key, usually TempStream'),
+    contentId: z.string().describe('Source page ID'),
+    spaceKey: z.string().describe('Target space key'),
     templateId: z.string().optional().describe('Target space template ID'),
     name: z.string().optional().describe('Target template name if id unknown'),
     description: z.string().optional().describe('Replace template description entirely'),
     descriptionSuffix: z
       .string()
       .optional()
-      .describe('Append/replace trailing sync note, e.g. "(синхрон с BSA 2.25: хаб + дети US)"'),
+      .describe('Append/replace trailing sync note in template description'),
   },
   async (args) => {
     try {
@@ -1315,9 +1315,9 @@ server.tool(
 
 server.tool(
   'confluence_deleteSpaceTemplate',
-  'DESTRUCTIVE. Delete one TempStream/space Create template (DELETE /rest/experimental/template/{id}). ALWAYS stop and get explicit human approval in chat first — never invent confirm. Requires confirm="DELETE" and confirmName=exact template name. No trash restore; archive dump first.',
+  'DESTRUCTIVE. Delete one space Create template (DELETE /rest/experimental/template/{id}). ALWAYS stop and get explicit human approval in chat first — never invent confirm. Requires confirm="DELETE" and confirmName=exact template name. No trash restore; archive dump first.',
   {
-    spaceKey: z.string().describe('Space key, e.g. TempStream'),
+    spaceKey: z.string().describe('Space key, e.g. MYSPACE'),
     templateId: z.string().optional().describe('Space template ID to delete'),
     name: z.string().optional().describe('Template name or substring if id unknown'),
     confirm: z
@@ -1347,7 +1347,7 @@ server.tool(
   'confluence_deleteSpaceTemplates',
   'DESTRUCTIVE. Delete several space Create templates by id. ALWAYS get explicit human approval in chat first. Requires confirm="DELETE" and confirmNames[] exact names (same order as templateIds). Continues on per-item errors. Archive dump first.',
   {
-    spaceKey: z.string().describe('Space key, e.g. TempStream'),
+    spaceKey: z.string().describe('Space key, e.g. MYSPACE'),
     templateIds: z
       .array(z.string())
       .min(1)
