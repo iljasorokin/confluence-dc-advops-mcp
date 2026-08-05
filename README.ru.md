@@ -15,7 +15,7 @@
 - `CONFLUENCE_HOST` (env или `~/.atlassian-dc-mcp/confluence.env`) — обычно локальный proxy, напр. `https://localhost:8443`
 - `CONFLUENCE_API_TOKEN` (env) или macOS Keychain: service `atlassian-dc-mcp` / account `confluence-token`
 
-Токены и `*.env` **не** коммитить.
+Токены и `*.env` **не** коммитить. См. [SECURITY.md](./SECURITY.md).
 
 ## Tools
 
