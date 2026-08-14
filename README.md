@@ -30,7 +30,8 @@ Do **not** commit tokens or `*.env` files. See [SECURITY.md](./SECURITY.md).
 | `confluence_listAttachments` | List attachments on a page |
 | `confluence_downloadAttachmentToFile` | Download attachment binary to a local file |
 | `confluence_uploadAttachmentFromFile` | Upload / new version of attachment from local file |
-| `confluence_listComments` / `addComment` / `replyToComment` | Footer (page) comments; quote page text in the body (no inline) |
+| `confluence_listComments` / `addComment` / `replyToComment` | Footer (page) comments; quote page text in the body (no inline create) |
+| `confluence_listInlineComments` / `replyToInlineComment` | Read inline comments (open vs resolved) and reply in thread |
 | `confluence_listLabels` / `addLabels` / `removeLabels` / `setLabels` | Page labels (`global` / `my`) |
 | `confluence_listSpaceTemplates` | List space page templates (`spaceKey` required) |
 | `confluence_getSpaceTemplateToFile` | Dump space template body to a local XML file |
@@ -98,6 +99,17 @@ No inline comments. Put a quote from the page in the comment body so the subject
 | `confluence_replyToComment` | Reply in a footer thread |
 
 `bodyFormat`: `plain` (default — wrap in `<p>`, blank lines = paragraphs) or `storage` (raw Confluence storage XML).
+
+## Inline comments (read + reply only)
+
+Does **not** create new text anchors. Use footer comments with a quote if you need a new note.
+
+| Tool | When |
+|------|------|
+| `confluence_listInlineComments` | List inline comments; `status`: `open` (on page) \| `resolved` \| `all` |
+| `confluence_replyToInlineComment` | Reply in an existing inline thread |
+
+Each item includes `status` (`open`\|`resolved`), `visibleOnPage` (true when open on the page), and `originalSelection` (anchored text when present).
 
 ## Cursor config
 

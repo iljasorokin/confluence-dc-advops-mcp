@@ -9,7 +9,8 @@
  * - sync catalog page → space template in one call (body + labels)
  * - list / add / remove / set page labels; set labels on space templates
  *   (Create from template copies template labels onto the new page)
- * - list / add / reply to page footer comments (quotes in body; no inline)
+ * - list / add / reply to page footer comments (quotes in body; no create-inline)
+ * - list inline comments (open on page vs resolved) and reply in their threads
  *
  * Auth/host: same as @atlassian-dc-mcp/confluence (local TLS proxy + keychain token).
  */
@@ -1219,11 +1220,35 @@ function summarizeComment(c) {
     c.version?.by?.username ||
     c.history?.createdBy?.displayName ||
     c.history?.createdBy?.username;
+  const loc = c.extensions?.location || 'footer';
+  const resolution = c.extensions?.resolution || null;
+  const inlineProps = c.extensions?.inlineProperties || null;
+  const resolutionStatus = resolution?.status
+    ? String(resolution.status).toLowerCase()
+    : null;
+  const isResolved =
+    loc === 'resolved' || resolutionStatus === 'resolved';
   return {
     id: String(c.id),
     parentCommentId: parent ? String(parent.id) : null,
     containerId: c.container?.id != null ? String(c.container.id) : undefined,
-    location: c.extensions?.location || 'footer',
+    location: loc,
+    status: isResolved ? 'resolved' : 'open',
+    visibleOnPage: loc === 'inline' && !isResolved,
+    originalSelection:
+      inlineProps?.originalSelection ||
+      inlineProps?.textSelection ||
+      null,
+    markerRef: inlineProps?.markerRef != null ? String(inlineProps.markerRef) : null,
+    resolution: resolution
+      ? {
+          status: resolution.status,
+          lastModifier:
+            resolution.lastModifier?.displayName ||
+            resolution.lastModifier?.username ||
+            null,
+        }
+      : undefined,
     bodyStorage: storage,
     bodyText: storageToPlainHint(storage),
     version: c.version?.number,
@@ -1233,17 +1258,22 @@ function summarizeComment(c) {
   };
 }
 
-async function listPageComments(contentId, { depth = 'all', limit = 50 } = {}) {
+async function listPageComments(
+  contentId,
+  { depth = 'all', limit = 50, locations = ['footer'] } = {},
+) {
+  const locs = Array.isArray(locations) && locations.length ? locations : ['footer'];
   const results = [];
   let start = 0;
   const pageLimit = Math.min(Math.max(Number(limit) || 50, 1), 200);
   for (;;) {
     const qs = new URLSearchParams({
-      expand: 'body.storage,version,history,ancestors,container,extensions.resolution',
-      location: 'footer',
+      expand:
+        'body.storage,version,history,ancestors,container,extensions.inlineProperties,extensions.resolution',
       limit: String(pageLimit),
       start: String(start),
     });
+    for (const loc of locs) qs.append('location', loc);
     if (depth === 'all') qs.set('depth', 'all');
     const data = await confluenceApi(
       'GET',
@@ -1259,11 +1289,19 @@ async function listPageComments(contentId, { depth = 'all', limit = 50 } = {}) {
   return results.map(summarizeComment);
 }
 
+async function getComment(commentId) {
+  return confluenceApi(
+    'GET',
+    `/rest/api/content/${commentId}?expand=body.storage,version,history,ancestors,container,extensions.inlineProperties,extensions.resolution`,
+  );
+}
+
 async function addPageComment({
   contentId,
   body,
   bodyFormat = 'plain',
   parentCommentId,
+  location,
 }) {
   const storage = resolveCommentStorage(body, bodyFormat);
   const payload = {
@@ -1279,9 +1317,13 @@ async function addPageComment({
   if (parentCommentId) {
     payload.ancestors = [{ id: String(parentCommentId) }];
   }
+  if (location === 'inline') {
+    // Reply in an inline thread — do not create a new text anchor.
+    payload.extensions = { location: 'inline' };
+  }
   const created = await confluenceApi(
     'POST',
-    '/rest/api/content?expand=body.storage,version,history,ancestors,container,extensions',
+    '/rest/api/content?expand=body.storage,version,history,ancestors,container,extensions.inlineProperties,extensions.resolution',
     payload,
   );
   return {
@@ -1289,6 +1331,35 @@ async function addPageComment({
     parentCommentId: parentCommentId ? String(parentCommentId) : null,
     comment: summarizeComment(created),
   };
+}
+
+async function replyToInlineComment({
+  contentId,
+  parentCommentId,
+  body,
+  bodyFormat = 'plain',
+}) {
+  const parent = await getComment(parentCommentId);
+  const loc = parent.extensions?.location;
+  if (loc !== 'inline' && loc !== 'resolved') {
+    throw new Error(
+      `Parent ${parentCommentId} is not an inline comment (location=${loc || 'none'}). ` +
+        'Use confluence_replyToComment for footer threads.',
+    );
+  }
+  const pageId =
+    contentId ||
+    (parent.container?.type === 'page' ? parent.container.id : null);
+  if (!pageId) {
+    throw new Error(`Could not resolve page id for inline comment ${parentCommentId}`);
+  }
+  return addPageComment({
+    contentId: String(pageId),
+    body,
+    bodyFormat,
+    parentCommentId,
+    location: 'inline',
+  });
 }
 
 function ok(data) {
@@ -1306,7 +1377,7 @@ function fail(error) {
 
 const server = new McpServer({
   name: 'confluence-dc-advops-mcp',
-  version: '1.7.0',
+  version: '1.8.0',
 });
 
 server.tool(
@@ -1461,6 +1532,88 @@ server.tool(
           body,
           bodyFormat: bodyFormat || 'plain',
           parentCommentId,
+        }),
+      );
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+server.tool(
+  'confluence_listInlineComments',
+  'List inline comments on a page (read-only listing). Distinguishes open (visible on page, location=inline) vs resolved (location=resolved). Does not create new inline anchors.',
+  {
+    contentId: z.string().describe('Page ID'),
+    status: z
+      .enum(['open', 'resolved', 'all'])
+      .optional()
+      .describe(
+        'open = visible on page; resolved = in Resolved; all = both (default all)',
+      ),
+    depth: z
+      .enum(['root', 'all'])
+      .optional()
+      .describe('root = top-level only; all = include replies (default all)'),
+    limit: z
+      .number()
+      .int()
+      .positive()
+      .max(200)
+      .optional()
+      .describe('Page size per request (default 50)'),
+  },
+  async ({ contentId, status, depth, limit }) => {
+    try {
+      const st = status || 'all';
+      const locations =
+        st === 'open'
+          ? ['inline']
+          : st === 'resolved'
+            ? ['resolved']
+            : ['inline', 'resolved'];
+      const comments = await listPageComments(contentId, {
+        depth: depth === 'root' ? 'root' : 'all',
+        limit,
+        locations,
+      });
+      return ok({
+        contentId: String(contentId),
+        statusFilter: st,
+        count: comments.length,
+        open: comments.filter((c) => c.status === 'open').length,
+        resolved: comments.filter((c) => c.status === 'resolved').length,
+        comments,
+      });
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+server.tool(
+  'confluence_replyToInlineComment',
+  'Reply in an existing inline comment thread (open or resolved). Does not create a new text selection / anchor. bodyFormat plain|storage like footer comments.',
+  {
+    contentId: z
+      .string()
+      .optional()
+      .describe('Page ID (optional if resolvable from parent comment container)'),
+    parentCommentId: z.string().describe('Parent inline comment ID'),
+    body: z.string().describe('Reply text'),
+    bodyFormat: z
+      .enum(['plain', 'storage'])
+      .optional()
+      .describe('plain (default) or storage XML'),
+  },
+  async ({ contentId, parentCommentId, body, bodyFormat }) => {
+    try {
+      return ok(
+        await replyToInlineComment({
+          contentId,
+          parentCommentId,
+          body,
+          bodyFormat: bodyFormat || 'plain',
         }),
       );
     } catch (error) {

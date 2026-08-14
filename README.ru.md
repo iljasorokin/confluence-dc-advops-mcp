@@ -30,7 +30,8 @@
 | `confluence_listAttachments` | Список вложений страницы |
 | `confluence_downloadAttachmentToFile` | Скачать вложение в локальный файл |
 | `confluence_uploadAttachmentFromFile` | Загрузить / новую версию вложения из файла |
-| `confluence_listComments` / `addComment` / `replyToComment` | Комментарии под страницей; цитату из текста — в теле (без inline) |
+| `confluence_listComments` / `addComment` / `replyToComment` | Комментарии под страницей; цитату из текста — в теле (без создания inline) |
+| `confluence_listInlineComments` / `replyToInlineComment` | Читать inline (open / resolved) и отвечать в треде |
 | `confluence_listLabels` / `addLabels` / `removeLabels` / `setLabels` | Метки страницы (`global` / `my`) |
 | `confluence_listSpaceTemplates` | Список page-шаблонов пространства (`spaceKey` обязателен) |
 | `confluence_getSpaceTemplateToFile` | Выгрузить тело space template в локальный XML |
@@ -111,6 +112,17 @@ Inline нет. Чтобы было понятно, о чём речь — цит
 | `confluence_replyToComment` | Ответ в треде |
 
 `bodyFormat`: `plain` (по умолчанию — `<p>`, пустая строка = абзац) или `storage` (сырой storage XML).
+
+## Inline-комментарии (только чтение + ответ)
+
+**Не** создаёт новые якоря на тексте. Новый комментарий «про фрагмент» — footer с цитатой.
+
+| Tool | Когда |
+|------|-------|
+| `confluence_listInlineComments` | Список inline; `status`: `open` (на странице) \| `resolved` \| `all` |
+| `confluence_replyToInlineComment` | Ответ в существующем inline-треде |
+
+В каждом элементе: `status` (`open`\|`resolved`), `visibleOnPage` (true, если виден на странице), `originalSelection` (заякорённый текст, если есть).
 
 ## Конфиг Cursor
 
