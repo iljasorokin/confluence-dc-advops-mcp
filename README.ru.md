@@ -30,11 +30,13 @@
 | `confluence_listAttachments` | Список вложений страницы |
 | `confluence_downloadAttachmentToFile` | Скачать вложение в локальный файл |
 | `confluence_uploadAttachmentFromFile` | Загрузить / новую версию вложения из файла |
+| `confluence_listLabels` / `addLabels` / `removeLabels` / `setLabels` | Метки страницы (`global` / `my`) |
 | `confluence_listSpaceTemplates` | Список page-шаблонов пространства (`spaceKey` обязателен) |
 | `confluence_getSpaceTemplateToFile` | Выгрузить тело space template в локальный XML |
-| `confluence_createSpaceTemplateFromFile` | Создать space template из файла (POST) |
+| `confluence_createSpaceTemplateFromFile` | Создать space template из файла (POST); опционально `labels` / `copyLabelsFromContentId` |
 | `confluence_updateSpaceTemplateFromFile` | Обновить тело space template из файла |
-| `confluence_syncPageToSpaceTemplate` | **Быстрый путь:** тело страницы → снимок Create-from-template |
+| `confluence_setSpaceTemplateLabels` | Метки space template (тело не трогает) |
+| `confluence_syncPageToSpaceTemplate` | **Быстрый путь:** тело страницы **и метки** → снимок Create-from-template |
 | `confluence_deleteSpaceTemplate` / `…Templates` | **Деструктивно.** Удаление Create-шаблона(ов). Нужно явное OK в чате + `confirm: "DELETE"` + точное имя/имена. `destructiveHint`. |
 
 ### Порядок страниц среди siblings (DC 9.x)
@@ -71,6 +73,7 @@ confluence_syncPageToSpaceTemplate
   spaceKey: "<spaceKey>"
   templateId: "<templateId>"
   descriptionSuffix: "(примечание)"   # optional
+  # copyPageLabels: true по умолчанию — метки шаблона берутся со страницы
 ```
 
 Замечания по DC API:
@@ -79,6 +82,22 @@ confluence_syncPageToSpaceTemplate
 - GET только по template id часто **404** — всегда передавать `spaceKey`
 - Update: `PUT /rest/experimental/template` с `templateType: "page"` и `body.storage`
 - Delete: `DELETE /rest/experimental/template/{id}` — только через MCP delete tools после **явного** подтверждения человека (`confirm: "DELETE"` + точное `confirmName` / `confirmNames`). Корзины нет.
+
+## Метки (страницы + «Создать из шаблона»)
+
+Confluence копирует **метки space template** на страницы, созданные из шаблона. Метки вешаются на страницу-источник, затем sync (или сразу на шаблон). Новые страницы из «Создать из шаблона» их наследуют.
+
+| Tool | Когда |
+|------|-------|
+| `confluence_listLabels` | Прочитать метки страницы |
+| `confluence_addLabels` | Добавить, не снимая остальные |
+| `confluence_removeLabels` | Снять по имени |
+| `confluence_setLabels` | Заменить **global**-метки (личные `my:` не трогает) |
+| `confluence_setSpaceTemplateLabels` | Только метки шаблона (тело не меняет) |
+
+`confluence_syncPageToSpaceTemplate` копирует **global**-метки страницы на шаблон (`copyPageLabels` по умолчанию true). Если на странице меток нет — оставляет текущие метки шаблона. Явный список: `labels: [...]`. Create/update-from-file принимают `labels` и `copyLabelsFromContentId`.
+
+API страниц: `GET/POST /rest/api/content/{id}/label`, `DELETE …/label?name=`. Метки шаблона — в PUT experimental template (если не передать, DC может стереть — tools всегда шлют список, кроме `keepLabels: false` без замены).
 
 ## Конфиг Cursor
 

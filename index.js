@@ -6,7 +6,9 @@
  * - dump/update page storage from/to a local file (large templates without stuffing XML into chat)
  * - list / download / upload page attachments (binary via local file)
  * - list / dump / create / update / delete space page templates (Create from template)
- * - sync catalog page → space template in one call
+ * - sync catalog page → space template in one call (body + labels)
+ * - list / add / remove / set page labels; set labels on space templates
+ *   (Create from template copies template labels onto the new page)
  *
  * Auth/host: same as @atlassian-dc-mcp/confluence (local TLS proxy + keychain token).
  */
@@ -135,6 +137,232 @@ function summarizeTemplate(t, { includeBodyHash = false } = {}) {
   return out;
 }
 
+function summarizeLabel(l) {
+  const out = {
+    prefix: l.prefix || 'global',
+    name: l.name,
+  };
+  if (l.id != null) out.id = String(l.id);
+  return out;
+}
+
+/** Normalize tool input (`["a"]` or `[{name, prefix}]`) to DC label objects. */
+function toLabelPayload(labels) {
+  if (!Array.isArray(labels)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const l of labels) {
+    let prefix = 'global';
+    let name = '';
+    if (typeof l === 'string') {
+      name = l.trim();
+    } else if (l && typeof l === 'object') {
+      prefix = l.prefix || 'global';
+      name = String(l.name || '').trim();
+    }
+    if (!name) continue;
+    const key = `${prefix}:${name}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ prefix, name });
+  }
+  return out;
+}
+
+function asResults(data) {
+  if (!data) return [];
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data.results)) return data.results;
+  return [];
+}
+
+async function listContentLabels(contentId, { prefix } = {}) {
+  const results = [];
+  let start = 0;
+  const limit = 200;
+  for (;;) {
+    const qs = new URLSearchParams({
+      start: String(start),
+      limit: String(limit),
+    });
+    if (prefix) qs.set('prefix', prefix);
+    const data = await confluenceApi(
+      'GET',
+      `/rest/api/content/${contentId}/label?${qs.toString()}`,
+    );
+    const batch = asResults(data);
+    results.push(...batch);
+    const total = data.totalSize ?? start + batch.length;
+    start += data.size ?? batch.length;
+    if (!batch.length || start >= total) break;
+    if (start > 2000) break;
+  }
+  let labels = results.map(summarizeLabel);
+  if (prefix) labels = labels.filter((l) => l.prefix === prefix);
+  return labels;
+}
+
+async function addContentLabels(contentId, labels) {
+  const payload = toLabelPayload(labels);
+  if (!payload.length) throw new Error('Provide at least one label name');
+  await confluenceApi('POST', `/rest/api/content/${contentId}/label`, payload);
+  return {
+    contentId: String(contentId),
+    added: payload.map((l) => l.name),
+    labels: await listContentLabels(contentId),
+  };
+}
+
+async function removeContentLabels(contentId, labels) {
+  const payload = toLabelPayload(labels);
+  if (!payload.length) throw new Error('Provide at least one label name');
+  const results = [];
+  for (const l of payload) {
+    const qs = new URLSearchParams({ name: l.name, prefix: l.prefix });
+    try {
+      await confluenceApi(
+        'DELETE',
+        `/rest/api/content/${contentId}/label?${qs.toString()}`,
+      );
+      results.push({ ok: true, prefix: l.prefix, name: l.name });
+    } catch (error) {
+      results.push({
+        ok: false,
+        prefix: l.prefix,
+        name: l.name,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return {
+    contentId: String(contentId),
+    requested: payload.length,
+    removed: results.filter((r) => r.ok).length,
+    failed: results.filter((r) => r.ok === false).length,
+    results,
+    labels: await listContentLabels(contentId),
+  };
+}
+
+/**
+ * Replace labels of one prefix (default global). Leaves other prefixes (e.g. my) untouched.
+ */
+async function setContentLabels(contentId, labels, { prefix = 'global' } = {}) {
+  const desired = toLabelPayload(labels).filter((l) => l.prefix === prefix);
+  const current = await listContentLabels(contentId, { prefix });
+  const desiredNames = new Set(desired.map((l) => l.name));
+  const currentNames = new Set(current.map((l) => l.name));
+  const toAdd = desired.filter((l) => !currentNames.has(l.name));
+  const toRemove = current.filter((l) => !desiredNames.has(l.name));
+  if (toAdd.length) {
+    await confluenceApi('POST', `/rest/api/content/${contentId}/label`, toAdd);
+  }
+  for (const l of toRemove) {
+    const qs = new URLSearchParams({ name: l.name, prefix: l.prefix });
+    await confluenceApi(
+      'DELETE',
+      `/rest/api/content/${contentId}/label?${qs.toString()}`,
+    );
+  }
+  return {
+    contentId: String(contentId),
+    prefix,
+    added: toAdd.map((l) => l.name),
+    removed: toRemove.map((l) => l.name),
+    labels: await listContentLabels(contentId),
+  };
+}
+
+/**
+ * labels[] wins; else copy global labels from a page (if any);
+ * else keep current template labels when keepLabels.
+ */
+async function resolveLabelsForTemplate({
+  labels,
+  copyLabelsFromContentId,
+  keepLabels = true,
+  currentLabels = [],
+}) {
+  if (Array.isArray(labels)) {
+    return { labels: toLabelPayload(labels), source: 'explicit' };
+  }
+  if (copyLabelsFromContentId) {
+    const fromPage = await listContentLabels(copyLabelsFromContentId, {
+      prefix: 'global',
+    });
+    if (fromPage.length) return { labels: toLabelPayload(fromPage), source: 'page' };
+  }
+  if (keepLabels) {
+    return { labels: toLabelPayload(currentLabels || []), source: 'template' };
+  }
+  return { labels: undefined, source: 'omit' };
+}
+
+async function putSpaceTemplate({
+  current,
+  spaceKey,
+  name,
+  description,
+  storage,
+  labels,
+}) {
+  if (typeof storage !== 'string' || !storage.trim()) {
+    throw new Error(
+      `No storage body for template ${current.templateId} (${current.name})`,
+    );
+  }
+  const payload = {
+    templateId: String(current.templateId),
+    name: name || current.name,
+    description: description ?? current.description ?? '',
+    templateType: current.templateType || 'page',
+    space: { key: spaceKey || current.space?.key },
+    body: {
+      storage: {
+        value: storage,
+        representation: 'storage',
+      },
+    },
+  };
+  if (labels !== undefined) {
+    payload.labels = toLabelPayload(labels);
+  }
+  const updated = await confluenceApi('PUT', '/rest/experimental/template', payload);
+  return { payload, updated };
+}
+
+async function setSpaceTemplateLabels({ spaceKey, templateId, name, labels }) {
+  if (!Array.isArray(labels)) {
+    throw new Error('labels array is required (pass [] to clear)');
+  }
+  const current = await findSpaceTemplate({
+    spaceKey,
+    templateId,
+    name,
+    expandBody: true,
+  });
+  const previous = toLabelPayload(current.labels || []);
+  const { payload } = await putSpaceTemplate({
+    current,
+    spaceKey,
+    storage: templateStorage(current),
+    labels,
+  });
+  const after = await findSpaceTemplate({
+    spaceKey,
+    templateId: String(current.templateId),
+    expandBody: false,
+  });
+  return {
+    templateId: String(current.templateId),
+    name: current.name,
+    spaceKey: payload.space.key,
+    previous: previous.map((l) => l.name),
+    labels: (after.labels || payload.labels || []).map((l) => l.name || l),
+    note: 'Create from template copies these labels onto the new page.',
+  };
+}
+
 async function getPageMeta(contentId, expand = 'version,space,ancestors,body.storage') {
   return confluenceApi('GET', `/rest/api/content/${contentId}?expand=${expand}`);
 }
@@ -219,7 +447,8 @@ async function createSpaceTemplateFromFile({
   name,
   filePath,
   description = '',
-  labels = [],
+  labels,
+  copyLabelsFromContentId,
 }) {
   if (!existsSync(filePath)) throw new Error(`File not found: ${filePath}`);
   const storage = readFileSync(filePath, 'utf8');
@@ -233,6 +462,13 @@ async function createSpaceTemplateFromFile({
     );
   }
 
+  const resolved = await resolveLabelsForTemplate({
+    labels,
+    copyLabelsFromContentId,
+    keepLabels: false,
+    currentLabels: [],
+  });
+
   const payload = {
     name,
     description: description || '',
@@ -245,10 +481,8 @@ async function createSpaceTemplateFromFile({
       },
     },
   };
-  if (labels.length) {
-    payload.labels = labels.map((l) =>
-      typeof l === 'string' ? { prefix: 'global', name: l } : { prefix: l.prefix || 'global', name: l.name },
-    );
+  if (resolved.labels?.length) {
+    payload.labels = resolved.labels;
   }
 
   const created = await confluenceApi('POST', '/rest/experimental/template', payload);
@@ -262,6 +496,10 @@ async function createSpaceTemplateFromFile({
     bodyChars: storage.length,
     bodySha256: sha256(storage),
     matchedSha256: sha256(createdStorage) === sha256(storage),
+    labelSource: resolved.source,
+    note: payload.labels?.length
+      ? 'Create from template copies these labels onto the new page.'
+      : undefined,
   };
 }
 
@@ -272,6 +510,8 @@ async function updateSpaceTemplateFromFile({
   filePath,
   description,
   keepLabels = true,
+  labels,
+  copyLabelsFromContentId,
 }) {
   if (!existsSync(filePath)) throw new Error(`File not found: ${filePath}`);
   const storage = readFileSync(filePath, 'utf8');
@@ -285,27 +525,21 @@ async function updateSpaceTemplateFromFile({
     expandBody: false,
   });
 
-  const payload = {
-    templateId: String(current.templateId),
-    name: name || current.name,
-    description: description ?? current.description ?? '',
-    templateType: current.templateType || 'page',
-    space: { key: spaceKey || current.space?.key },
-    body: {
-      storage: {
-        value: storage,
-        representation: 'storage',
-      },
-    },
-  };
-  if (keepLabels && current.labels?.length) {
-    payload.labels = current.labels.map((l) => ({
-      prefix: l.prefix || 'global',
-      name: l.name,
-    }));
-  }
+  const resolved = await resolveLabelsForTemplate({
+    labels,
+    copyLabelsFromContentId,
+    keepLabels,
+    currentLabels: current.labels || [],
+  });
 
-  const updated = await confluenceApi('PUT', '/rest/experimental/template', payload);
+  const { payload, updated } = await putSpaceTemplate({
+    current,
+    spaceKey,
+    name,
+    description: description ?? current.description ?? '',
+    storage,
+    labels: resolved.labels,
+  });
   const updatedStorage = templateStorage(updated) || storage;
   return {
     templateId: String(current.templateId),
@@ -317,6 +551,7 @@ async function updateSpaceTemplateFromFile({
     bodySha256: sha256(storage),
     responseName: updated?.name,
     matchedSha256: sha256(updatedStorage) === sha256(storage),
+    labelSource: resolved.source,
   };
 }
 
@@ -427,6 +662,8 @@ async function syncPageToSpaceTemplate({
   name,
   description,
   descriptionSuffix,
+  copyPageLabels = true,
+  labels,
 }) {
   const page = await getPageMeta(contentId, 'version,space,body.storage,title');
   const storage = page.body?.storage?.value;
@@ -450,25 +687,20 @@ async function syncPageToSpaceTemplate({
     }
   }
 
-  const payload = {
-    templateId: String(current.templateId),
-    name: current.name,
-    description: desc,
-    templateType: current.templateType || 'page',
-    space: { key: spaceKey || current.space?.key },
-    labels: (current.labels || []).map((l) => ({
-      prefix: l.prefix || 'global',
-      name: l.name,
-    })),
-    body: {
-      storage: {
-        value: storage,
-        representation: 'storage',
-      },
-    },
-  };
+  const resolved = await resolveLabelsForTemplate({
+    labels,
+    copyLabelsFromContentId: copyPageLabels !== false ? contentId : undefined,
+    keepLabels: true,
+    currentLabels: current.labels || [],
+  });
 
-  const updated = await confluenceApi('PUT', '/rest/experimental/template', payload);
+  const { payload, updated } = await putSpaceTemplate({
+    current,
+    spaceKey,
+    description: desc,
+    storage,
+    labels: resolved.labels ?? toLabelPayload(current.labels || []),
+  });
   const updatedStorage = templateStorage(updated) || storage;
   return {
     sourcePageId: String(contentId),
@@ -478,9 +710,13 @@ async function syncPageToSpaceTemplate({
     templateName: current.name,
     spaceKey: payload.space.key,
     description: desc,
+    labels: payload.labels?.map((l) => l.name) || [],
+    labelSource: resolved.source,
+    copiedPageLabels: resolved.source === 'page',
     bodyChars: storage.length,
     bodySha256: sha256(storage),
     matchedSha256: sha256(updatedStorage) === sha256(storage),
+    note: 'Create from template copies these labels onto the new page.',
   };
 }
 
@@ -943,7 +1179,7 @@ function fail(error) {
 
 const server = new McpServer({
   name: 'confluence-dc-advops-mcp',
-  version: '1.5.0',
+  version: '1.6.0',
 });
 
 server.tool(
@@ -1189,6 +1425,86 @@ server.tool(
 );
 
 server.tool(
+  'confluence_listLabels',
+  'List labels on a Confluence page (GET /rest/api/content/{id}/label). Optional prefix filter (global|my).',
+  {
+    contentId: z.string().describe('Page ID'),
+    prefix: z
+      .enum(['global', 'my'])
+      .optional()
+      .describe('Filter by label prefix (default: all)'),
+  },
+  async ({ contentId, prefix }) => {
+    try {
+      const labels = await listContentLabels(contentId, { prefix });
+      return ok({
+        contentId: String(contentId),
+        count: labels.length,
+        labels,
+      });
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+server.tool(
+  'confluence_addLabels',
+  'Add labels to a page (POST /rest/api/content/{id}/label). Does not remove existing labels. Global prefix.',
+  {
+    contentId: z.string().describe('Page ID'),
+    labels: z
+      .array(z.string())
+      .min(1)
+      .describe('Label names to add, e.g. ["draft"]'),
+  },
+  async ({ contentId, labels }) => {
+    try {
+      return ok(await addContentLabels(contentId, labels));
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+server.tool(
+  'confluence_removeLabels',
+  'Remove labels from a page (DELETE /rest/api/content/{id}/label?name=). Continues on per-label errors.',
+  {
+    contentId: z.string().describe('Page ID'),
+    labels: z
+      .array(z.string())
+      .min(1)
+      .describe('Label names to remove'),
+  },
+  async ({ contentId, labels }) => {
+    try {
+      return ok(await removeContentLabels(contentId, labels));
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+server.tool(
+  'confluence_setLabels',
+  'Replace global labels on a page (add missing, remove extras). Leaves personal (my) labels untouched.',
+  {
+    contentId: z.string().describe('Page ID'),
+    labels: z
+      .array(z.string())
+      .describe('Desired global label names (empty array clears global labels)'),
+  },
+  async ({ contentId, labels }) => {
+    try {
+      return ok(await setContentLabels(contentId, labels));
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+server.tool(
   'confluence_listSpaceTemplates',
   'List space page templates via /rest/experimental/template/page (DC). spaceKey required. Optional nameContains filter. Does not expand body by default (fast).',
   {
@@ -1248,16 +1564,15 @@ server.tool(
     labels: z
       .array(z.string())
       .optional()
-      .describe('Optional label names (global prefix)'),
+      .describe('Label names on the template (copied onto pages created from it)'),
+    copyLabelsFromContentId: z
+      .string()
+      .optional()
+      .describe('Copy global labels from this page onto the new template (ignored if labels is set)'),
   },
   async (args) => {
     try {
-      return ok(
-        await createSpaceTemplateFromFile({
-          ...args,
-          labels: args.labels || [],
-        }),
-      );
+      return ok(await createSpaceTemplateFromFile(args));
     } catch (error) {
       return fail(error);
     }
@@ -1274,6 +1589,14 @@ server.tool(
     filePath: z.string().describe('Absolute path to storage XML'),
     description: z.string().optional().describe('New description; default keep current'),
     keepLabels: z.boolean().optional().describe('Keep existing labels (default true)'),
+    labels: z
+      .array(z.string())
+      .optional()
+      .describe('Replace template labels with these names (wins over keepLabels / copy)'),
+    copyLabelsFromContentId: z
+      .string()
+      .optional()
+      .describe('Copy global labels from this page onto the template'),
   },
   async (args) => {
     try {
@@ -1289,7 +1612,7 @@ server.tool(
 
 server.tool(
   'confluence_syncPageToSpaceTemplate',
-  'Fast path: copy body.storage from a page contentId into a space template (Create from template snapshot).',
+  'Fast path: copy page body.storage (and by default global labels) into a space template. Create from template then stamps those labels on the new page.',
   {
     contentId: z.string().describe('Source page ID'),
     spaceKey: z.string().describe('Target space key'),
@@ -1300,6 +1623,14 @@ server.tool(
       .string()
       .optional()
       .describe('Append/replace trailing sync note in template description'),
+    copyPageLabels: z
+      .boolean()
+      .optional()
+      .describe('Copy global labels from the source page onto the template (default true). If the page has none, keep current template labels.'),
+    labels: z
+      .array(z.string())
+      .optional()
+      .describe('Explicit template labels (wins over copyPageLabels)'),
   },
   async (args) => {
     try {
@@ -1307,6 +1638,29 @@ server.tool(
         throw new Error('Provide templateId and/or name');
       }
       return ok(await syncPageToSpaceTemplate(args));
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+server.tool(
+  'confluence_setSpaceTemplateLabels',
+  'Set labels on a space template (PUT, body unchanged). Create from template copies these onto the new page. Pass [] to clear.',
+  {
+    spaceKey: z.string().describe('Space key, e.g. MYSPACE'),
+    templateId: z.string().optional().describe('Space template ID'),
+    name: z.string().optional().describe('Template name or substring if id unknown'),
+    labels: z
+      .array(z.string())
+      .describe('Desired label names (empty array clears template labels)'),
+  },
+  async (args) => {
+    try {
+      if (!args.templateId && !args.name) {
+        throw new Error('Provide templateId and/or name');
+      }
+      return ok(await setSpaceTemplateLabels(args));
     } catch (error) {
       return fail(error);
     }

@@ -30,11 +30,13 @@ Do **not** commit tokens or `*.env` files. See [SECURITY.md](./SECURITY.md).
 | `confluence_listAttachments` | List attachments on a page |
 | `confluence_downloadAttachmentToFile` | Download attachment binary to a local file |
 | `confluence_uploadAttachmentFromFile` | Upload / new version of attachment from local file |
+| `confluence_listLabels` / `addLabels` / `removeLabels` / `setLabels` | Page labels (`global` / `my`) |
 | `confluence_listSpaceTemplates` | List space page templates (`spaceKey` required) |
 | `confluence_getSpaceTemplateToFile` | Dump space template body to a local XML file |
-| `confluence_createSpaceTemplateFromFile` | Create new space template from file (POST) |
+| `confluence_createSpaceTemplateFromFile` | Create new space template from file (POST); optional `labels` / `copyLabelsFromContentId` |
 | `confluence_updateSpaceTemplateFromFile` | Publish space template body from file |
-| `confluence_syncPageToSpaceTemplate` | **Fast path:** copy page body → space Create-from-template snapshot |
+| `confluence_setSpaceTemplateLabels` | Set labels on a space template (body unchanged) |
+| `confluence_syncPageToSpaceTemplate` | **Fast path:** copy page body **and labels** → space Create-from-template snapshot |
 | `confluence_deleteSpaceTemplate` / `…Templates` | **Destructive.** Delete Create template(s). Requires human chat OK + `confirm: "DELETE"` + exact name(s). Annotated `destructiveHint`. |
 
 ### Fast path for large pages (BRD/SRS/…)
@@ -58,6 +60,7 @@ confluence_syncPageToSpaceTemplate
   spaceKey: "<spaceKey>"
   templateId: "<templateId>"
   descriptionSuffix: "(sync note)"   # optional
+  # copyPageLabels: true by default — template labels come from the page
 ```
 
 DC notes:
@@ -66,6 +69,22 @@ DC notes:
 - GET by template id alone often **404** — always pass `spaceKey`
 - Update: `PUT /rest/experimental/template` with `templateType: "page"` and `body.storage`
 - Delete: `DELETE /rest/experimental/template/{id}` — only via MCP delete tools after **human** confirmation (`confirm: "DELETE"` + exact `confirmName` / `confirmNames`). No trash restore.
+
+## Labels (pages + Create from template)
+
+Confluence copies **space-template labels** onto pages created from that template. Put labels on the catalog page, then sync (or set them on the template). New pages from «Create from template» inherit them.
+
+| Tool | When |
+|------|------|
+| `confluence_listLabels` | Read labels on a page |
+| `confluence_addLabels` | Add without removing others |
+| `confluence_removeLabels` | Remove by name |
+| `confluence_setLabels` | Replace **global** labels (`my:` left alone) |
+| `confluence_setSpaceTemplateLabels` | Labels on the template only (keeps body) |
+
+`confluence_syncPageToSpaceTemplate` copies the page’s **global** labels onto the template (`copyPageLabels` default true). If the page has none, current template labels are kept. Pass `labels: [...]` to set them explicitly. Create/update-from-file accept `labels` and `copyLabelsFromContentId`.
+
+Page API: `GET/POST /rest/api/content/{id}/label`, `DELETE …/label?name=`. Template labels go in the experimental template PUT payload (omitting them can wipe labels on DC — tools always send a list unless you set `keepLabels: false` with no replacement).
 
 ## Cursor config
 
