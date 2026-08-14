@@ -30,6 +30,7 @@
 | `confluence_listAttachments` | Список вложений страницы |
 | `confluence_downloadAttachmentToFile` | Скачать вложение в локальный файл |
 | `confluence_uploadAttachmentFromFile` | Загрузить / новую версию вложения из файла |
+| `confluence_listComments` / `addComment` / `replyToComment` | Комментарии под страницей; цитату из текста — в теле (без inline) |
 | `confluence_listLabels` / `addLabels` / `removeLabels` / `setLabels` | Метки страницы (`global` / `my`) |
 | `confluence_listSpaceTemplates` | Список page-шаблонов пространства (`spaceKey` обязателен) |
 | `confluence_getSpaceTemplateToFile` | Выгрузить тело space template в локальный XML |
@@ -98,6 +99,18 @@ Confluence копирует **метки space template** на страницы,
 `confluence_syncPageToSpaceTemplate` копирует **global**-метки страницы на шаблон (`copyPageLabels` по умолчанию true). Если на странице меток нет — оставляет текущие метки шаблона. Явный список: `labels: [...]`. Create/update-from-file принимают `labels` и `copyLabelsFromContentId`.
 
 API страниц: `GET/POST /rest/api/content/{id}/label`, `DELETE …/label?name=`. Метки шаблона — в PUT experimental template (если не передать, DC может стереть — tools всегда шлют список, кроме `keepLabels: false` без замены).
+
+## Комментарии под страницей
+
+Inline нет. Чтобы было понятно, о чём речь — цитату из страницы пишите в теле комментария.
+
+| Tool | Когда |
+|------|-------|
+| `confluence_listComments` | Список footer-комментариев (`location=footer`; `depth` root\|all) |
+| `confluence_addComment` | Новый комментарий под страницей |
+| `confluence_replyToComment` | Ответ в треде |
+
+`bodyFormat`: `plain` (по умолчанию — `<p>`, пустая строка = абзац) или `storage` (сырой storage XML).
 
 ## Конфиг Cursor
 

@@ -9,6 +9,7 @@
  * - sync catalog page → space template in one call (body + labels)
  * - list / add / remove / set page labels; set labels on space templates
  *   (Create from template copies template labels onto the new page)
+ * - list / add / reply to page footer comments (quotes in body; no inline)
  *
  * Auth/host: same as @atlassian-dc-mcp/confluence (local TLS proxy + keychain token).
  */
@@ -1164,6 +1165,132 @@ async function uploadAttachmentFromFile({
   };
 }
 
+function escapeHtml(text) {
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/** Plain text → storage XML. Blank lines split paragraphs; single newlines → <br />. */
+function plainToCommentStorage(text) {
+  const raw = String(text ?? '');
+  if (!raw.trim()) throw new Error('Comment body is empty');
+  return raw
+    .split(/\n{2,}/)
+    .map((block) => {
+      const inner = escapeHtml(block).replace(/\n/g, '<br />');
+      return `<p>${inner}</p>`;
+    })
+    .join('');
+}
+
+function resolveCommentStorage(body, bodyFormat = 'plain') {
+  if (bodyFormat === 'storage') {
+    const storage = String(body ?? '');
+    if (!storage.trim()) throw new Error('Comment body is empty');
+    return storage;
+  }
+  return plainToCommentStorage(body);
+}
+
+function storageToPlainHint(storage) {
+  if (typeof storage !== 'string') return '';
+  return storage
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function summarizeComment(c) {
+  const storage = c.body?.storage?.value;
+  const ancestors = c.ancestors || [];
+  const parent = [...ancestors].reverse().find((a) => a.type === 'comment') || null;
+  const by =
+    c.version?.by?.displayName ||
+    c.version?.by?.username ||
+    c.history?.createdBy?.displayName ||
+    c.history?.createdBy?.username;
+  return {
+    id: String(c.id),
+    parentCommentId: parent ? String(parent.id) : null,
+    containerId: c.container?.id != null ? String(c.container.id) : undefined,
+    location: c.extensions?.location || 'footer',
+    bodyStorage: storage,
+    bodyText: storageToPlainHint(storage),
+    version: c.version?.number,
+    when: c.version?.when || c.history?.createdDate,
+    by,
+    title: c.title,
+  };
+}
+
+async function listPageComments(contentId, { depth = 'all', limit = 50 } = {}) {
+  const results = [];
+  let start = 0;
+  const pageLimit = Math.min(Math.max(Number(limit) || 50, 1), 200);
+  for (;;) {
+    const qs = new URLSearchParams({
+      expand: 'body.storage,version,history,ancestors,container,extensions.resolution',
+      location: 'footer',
+      limit: String(pageLimit),
+      start: String(start),
+    });
+    if (depth === 'all') qs.set('depth', 'all');
+    const data = await confluenceApi(
+      'GET',
+      `/rest/api/content/${contentId}/child/comment?${qs.toString()}`,
+    );
+    const batch = asResults(data);
+    results.push(...batch);
+    const total = data.totalSize ?? start + batch.length;
+    start += data.size ?? batch.length;
+    if (!batch.length || start >= total) break;
+    if (start > 2000) break;
+  }
+  return results.map(summarizeComment);
+}
+
+async function addPageComment({
+  contentId,
+  body,
+  bodyFormat = 'plain',
+  parentCommentId,
+}) {
+  const storage = resolveCommentStorage(body, bodyFormat);
+  const payload = {
+    type: 'comment',
+    container: { id: String(contentId), type: 'page' },
+    body: {
+      storage: {
+        value: storage,
+        representation: 'storage',
+      },
+    },
+  };
+  if (parentCommentId) {
+    payload.ancestors = [{ id: String(parentCommentId) }];
+  }
+  const created = await confluenceApi(
+    'POST',
+    '/rest/api/content?expand=body.storage,version,history,ancestors,container,extensions',
+    payload,
+  );
+  return {
+    contentId: String(contentId),
+    parentCommentId: parentCommentId ? String(parentCommentId) : null,
+    comment: summarizeComment(created),
+  };
+}
+
 function ok(data) {
   return {
     content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
@@ -1179,7 +1306,7 @@ function fail(error) {
 
 const server = new McpServer({
   name: 'confluence-dc-advops-mcp',
-  version: '1.6.0',
+  version: '1.7.0',
 });
 
 server.tool(
@@ -1243,6 +1370,99 @@ server.tool(
   async (args) => {
     try {
       return ok(await uploadAttachmentFromFile(args));
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+server.tool(
+  'confluence_listComments',
+  'List footer (page) comments on a Confluence page. GET /rest/api/content/{id}/child/comment?location=footer. Inline comments are not included — put document quotes in the comment body instead.',
+  {
+    contentId: z.string().describe('Page ID'),
+    depth: z
+      .enum(['root', 'all'])
+      .optional()
+      .describe('root = top-level only; all = include replies (default all)'),
+    limit: z
+      .number()
+      .int()
+      .positive()
+      .max(200)
+      .optional()
+      .describe('Page size per request (default 50)'),
+  },
+  async ({ contentId, depth, limit }) => {
+    try {
+      const comments = await listPageComments(contentId, {
+        depth: depth === 'root' ? 'root' : 'all',
+        limit,
+      });
+      return ok({
+        contentId: String(contentId),
+        location: 'footer',
+        count: comments.length,
+        comments,
+      });
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+server.tool(
+  'confluence_addComment',
+  'Add a footer comment under a page (POST /rest/api/content type=comment). Not inline — quote the relevant page text in the body if needed. bodyFormat plain (default) wraps text in <p>; storage passes Confluence storage XML as-is.',
+  {
+    contentId: z.string().describe('Page ID'),
+    body: z
+      .string()
+      .describe(
+        'Comment text. Plain: use blank lines for paragraphs. Tip: start with a quote from the page so the subject is clear.',
+      ),
+    bodyFormat: z
+      .enum(['plain', 'storage'])
+      .optional()
+      .describe('plain (default) or storage XML'),
+  },
+  async ({ contentId, body, bodyFormat }) => {
+    try {
+      return ok(
+        await addPageComment({
+          contentId,
+          body,
+          bodyFormat: bodyFormat || 'plain',
+        }),
+      );
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+server.tool(
+  'confluence_replyToComment',
+  'Reply in a footer comment thread (POST comment with ancestors = parent). Same bodyFormat as addComment.',
+  {
+    contentId: z.string().describe('Page ID (container of the thread)'),
+    parentCommentId: z.string().describe('Parent footer comment ID'),
+    body: z.string().describe('Reply text (plain or storage per bodyFormat)'),
+    bodyFormat: z
+      .enum(['plain', 'storage'])
+      .optional()
+      .describe('plain (default) or storage XML'),
+  },
+  async ({ contentId, parentCommentId, body, bodyFormat }) => {
+    try {
+      return ok(
+        await addPageComment({
+          contentId,
+          body,
+          bodyFormat: bodyFormat || 'plain',
+          parentCommentId,
+        }),
+      );
     } catch (error) {
       return fail(error);
     }
