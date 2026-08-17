@@ -1,0 +1,20 @@
+<p>Lead &quot;quote&quot;</p>
+<h2><ac:inline-comment-marker ac:ref="m1"/>Матрица оценки</h2>
+<p>Before nested.</p>
+<h3>Вложенный критерий</h3>
+<p>Nested body.</p>
+<table><tbody>
+<tr><th>A</th><th>B</th></tr>
+<tr><td>1</td><td>2</td></tr>
+</tbody></table>
+<h2>Предметная область</h2>
+<ac:structured-macro ac:name="expand" ac:schema-version="1" ac:macro-id="e1">
+<ac:parameter ac:name="title">Скрыто</ac:parameter>
+<ac:rich-text-body><p>inside expand</p></ac:rich-text-body>
+</ac:structured-macro>
+<ac:structured-macro ac:name="mermaid-macro" ac:schema-version="1" ac:macro-id="u1">
+<ac:plain-text-body><![CDATA[flowchart LR
+A --> B]]></ac:plain-text-body>
+</ac:structured-macro>
+<h2>Матрица оценки</h2>
+<p>Duplicate heading section.</p>

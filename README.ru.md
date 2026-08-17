@@ -27,6 +27,11 @@
 | `confluence_setChildPageOrder` | Точный полный порядок детей (permutation; последовательный movepage) |
 | `confluence_getStorageToFile` | Выгрузить `body.storage` страницы в локальный XML (+ текущая version) |
 | `confluence_updateStorageFromFile` | Опубликовать storage XML из файла (автоинкремент version) |
+| `confluence_storage_listHeadings` | Заголовки в локальном storage-файле (без тел секций) |
+| `confluence_storage_getSection` | Одна секция: text / markdown / фрагмент storage (с лимитом) |
+| `confluence_storage_replaceSection` | Заменить тело одной секции на диске (`dryRun`) |
+| `confluence_storage_listMacros` | Инвентарь макросов (без тел) |
+| `confluence_storage_replaceMacroBody` | Заменить тело одного макроса (напр. mermaid CDATA) |
 | `confluence_listAttachments` | Список вложений страницы |
 | `confluence_downloadAttachmentToFile` | Скачать вложение в локальный файл |
 | `confluence_uploadAttachmentFromFile` | Загрузить / новую версию вложения из файла |
@@ -56,14 +61,19 @@ Cloud-эндпоинт `PUT /rest/api/content/{id}/move/...` на DC **отсу�
 
 ### Быстрый путь для крупных страниц (BRD/SRS/…)
 
-1. `confluence_getStorageToFile` → локальный `….xml`
-2. Точечное правление файла (Python / `StrReplace`; сущности не переэкранировать)
-3. `confluence_updateStorageFromFile` (без `version` — автоинкремент, или передать current+1)
-4. Проверка через `user-confluence-dc` / `confluence_getContent` `bodyMode: text`
-5. Если страница — снимок Create from template → синхронизировать space template (ниже)
-6. Удалить временный файл
+1. `confluence_getStorageToFile` → `/path/to/page.xml`
+2. `confluence_storage_listHeadings` / `getSection` (`format: text`) — **не** `@` и не Read dump-файл в чат
+3. `confluence_storage_replaceSection` или `confluence_storage_replaceMacroBody` (при сомнении `dryRun`)
+4. `confluence_updateStorageFromFile` (без `version` — автоинкремент, или передать current+1)
+5. Проверка через `user-confluence-dc` / `confluence_getContent` `bodyMode: text` (с лимитом)
+6. Если страница — снимок Create from template → синхронизировать space template (ниже)
+7. Удалить временный файл
 
-Для **маленьких** страниц — `user-confluence-dc` `confluence_updateContent` напрямую.
+Эти tools **не публикуют** и **не возвращают** полный XML. Python/`StrReplace` по dump — fallback, если кейс не покрыт.
+
+**Не** гонять всю страницу через Markdown (макросы и layout не восстановятся).
+
+Для **крошечных** страниц, которые не заготовки, — `user-confluence-dc` `confluence_updateContent`.
 
 ### Быстрый путь: страница → space template («Создать из шаблона»)
 

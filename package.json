@@ -1,20 +1,22 @@
 {
   "name": "confluence-dc-advops-mcp",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "private": true,
   "type": "module",
-  "description": "Local Confluence DC MCP: reparent, sibling reorder, file storage, attachments, labels, footer/inline comments, space template sync/delete (proxy auth)",
+  "description": "Local Confluence DC MCP: reparent, sibling reorder, file storage, surgical section/macro edits, attachments, labels, footer/inline comments, space template sync/delete (proxy auth)",
   "bin": {
     "confluence-dc-advops-mcp": "./index.js"
   },
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "test": "node --test test/*.test.js"
   },
   "engines": {
     "node": ">=18"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",
+    "htmlparser2": "^9.1.0",
     "zod": "^3.24.2"
   }
 }

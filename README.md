@@ -27,6 +27,11 @@ Do **not** commit tokens or `*.env` files. See [SECURITY.md](./SECURITY.md).
 | `confluence_setChildPageOrder` | Exact full child order (permutation; sequential movepage) |
 | `confluence_getStorageToFile` | Dump page `body.storage` to a local XML file (+ current version) |
 | `confluence_updateStorageFromFile` | Publish page storage XML from file (auto version bump) |
+| `confluence_storage_listHeadings` | Headings in a local storage file (no bodies) |
+| `confluence_storage_getSection` | One section as text / markdown / storage fragment (capped) |
+| `confluence_storage_replaceSection` | Replace one section body on disk (`dryRun` supported) |
+| `confluence_storage_listMacros` | Macro inventory (no bodies) |
+| `confluence_storage_replaceMacroBody` | Replace one macro body (e.g. mermaid CDATA) |
 | `confluence_listAttachments` | List attachments on a page |
 | `confluence_downloadAttachmentToFile` | Download attachment binary to a local file |
 | `confluence_uploadAttachmentFromFile` | Upload / new version of attachment from local file |
@@ -43,14 +48,19 @@ Do **not** commit tokens or `*.env` files. See [SECURITY.md](./SECURITY.md).
 
 ### Fast path for large pages (BRD/SRS/…)
 
-1. `confluence_getStorageToFile` → local `….xml`
-2. Surgical edit with Python/`StrReplace` on the file (preserve entities; do not re-escape)
-3. `confluence_updateStorageFromFile` (omit `version` to auto-bump, or pass current+1)
-4. Verify with `user-confluence-dc` / `confluence_getContent` `bodyMode: text`
-5. If the page is also a Create-from-template snapshot → sync space template (below)
-6. Delete the temp file
+1. `confluence_getStorageToFile` → `/path/to/page.xml`
+2. `confluence_storage_listHeadings` / `getSection` (`format: text`) — **do not** `@` or Read the dump file into chat
+3. `confluence_storage_replaceSection` or `confluence_storage_replaceMacroBody` (`dryRun` first if unsure)
+4. `confluence_updateStorageFromFile` (omit `version` to auto-bump, or pass current+1)
+5. Verify with `user-confluence-dc` / `confluence_getContent` `bodyMode: text` (limit chars)
+6. If the page is also a Create-from-template snapshot → sync space template (below)
+7. Delete the temp file
 
-For **small** pages, keep using `user-confluence-dc` `confluence_updateContent` directly.
+These storage tools **do not publish** and **do not return** the full XML. Python/`StrReplace` on the dump is a fallback when they do not cover the case.
+
+Do **not** round-trip the whole page through Markdown (macros/layout will not survive).
+
+For **tiny** pages that are not templates, `user-confluence-dc` `confluence_updateContent` is still ok.
 
 ### Fast path: page → space template (Create from template)
 

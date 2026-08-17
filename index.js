@@ -4,6 +4,7 @@
  * - move/reparent pages (until upstream parentId lands)
  * - reorder sibling pages (DC UI movepage.action: above / below / append)
  * - dump/update page storage from/to a local file (large templates without stuffing XML into chat)
+ * - surgical section/macro edits on a local storage XML file (no full XML in chat)
  * - list / download / upload page attachments (binary via local file)
  * - list / dump / create / update / delete space page templates (Create from template)
  * - sync catalog page → space template in one call (body + labels)
@@ -22,6 +23,13 @@ import { execFileSync } from 'node:child_process';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import {
+  listHeadings as storageListHeadings,
+  getSection as storageGetSection,
+  replaceSection as storageReplaceSection,
+  listMacros as storageListMacros,
+  replaceMacroBody as storageReplaceMacroBody,
+} from './storage.js';
 
 const ENV_FILE = join(homedir(), '.atlassian-dc-mcp', 'confluence.env');
 const KEYCHAIN_SERVICE = 'atlassian-dc-mcp';
@@ -1377,7 +1385,7 @@ function fail(error) {
 
 const server = new McpServer({
   name: 'confluence-dc-advops-mcp',
-  version: '1.8.0',
+  version: '1.9.0',
 });
 
 server.tool(
@@ -1791,6 +1799,141 @@ server.tool(
   async (args) => {
     try {
       return ok(await updateStorageFromFile(args));
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+server.tool(
+  'confluence_storage_listHeadings',
+  'List h1–h6 headings in a local Confluence storage XML file (order, level, visible text). Does not return section bodies or full XML. Run after getStorageToFile.',
+  {
+    filePath: z.string().describe('Absolute path to dumped storage XML'),
+  },
+  async ({ filePath }) => {
+    try {
+      return ok(storageListHeadings(filePath));
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+server.tool(
+  'confluence_storage_getSection',
+  'Read one section from a local storage XML file (heading until next same-or-higher heading). Default format=text. Does not return the whole page. Ambiguous heading → error + candidates.',
+  {
+    filePath: z.string().describe('Absolute path to dumped storage XML'),
+    heading: z.string().optional().describe('Exact heading text from listHeadings (whitespace-normalized)'),
+    headingIndex: z
+      .number()
+      .int()
+      .nonnegative()
+      .optional()
+      .describe('Index from listHeadings when heading text is ambiguous'),
+    includeHeading: z
+      .boolean()
+      .optional()
+      .describe('Include the heading node (default true)'),
+    format: z
+      .enum(['text', 'markdown', 'storage'])
+      .optional()
+      .describe('text (default), markdown (lossy), or storage fragment'),
+    maxChars: z
+      .number()
+      .int()
+      .positive()
+      .max(8000)
+      .optional()
+      .describe('Cap on returned body (default 4000, max 8000)'),
+  },
+  async (args) => {
+    try {
+      return ok(storageGetSection(args.filePath, args));
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+server.tool(
+  'confluence_storage_replaceSection',
+  'Replace the body of one section in a local storage XML file (heading kept). Does not publish. Markdown default; storage fragment allowed. Does not convert mermaid/layout/Jira. Ambiguous heading → error, file unchanged.',
+  {
+    filePath: z.string().describe('Absolute path to dumped storage XML'),
+    heading: z.string().optional().describe('Exact heading text from listHeadings'),
+    headingIndex: z
+      .number()
+      .int()
+      .nonnegative()
+      .optional()
+      .describe('Index from listHeadings when heading is ambiguous'),
+    body: z.string().describe('New section body only (not the whole page)'),
+    bodyFormat: z
+      .enum(['markdown', 'storage'])
+      .optional()
+      .describe('markdown (default) or storage XML fragment'),
+    dryRun: z.boolean().optional().describe('Compute diff without writing the file'),
+    replaceHeading: z
+      .boolean()
+      .optional()
+      .describe('Also replace the heading text (default false)'),
+    newHeading: z.string().optional().describe('New heading text when replaceHeading is true'),
+  },
+  async (args) => {
+    try {
+      return ok(storageReplaceSection(args.filePath, args));
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+server.tool(
+  'confluence_storage_listMacros',
+  'Inventory ac:structured-macro / ac:macro in a local storage XML file. Returns names, ids, params, parentHeading, bodyKind — not macro bodies.',
+  {
+    filePath: z.string().describe('Absolute path to dumped storage XML'),
+    name: z.string().optional().describe('Filter by macro name, e.g. mermaid-macro'),
+  },
+  async ({ filePath, name }) => {
+    try {
+      return ok(storageListMacros(filePath, { name }));
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+server.tool(
+  'confluence_storage_replaceMacroBody',
+  'Replace the body of one macro in a local storage XML file. Wrapper and parameters unchanged. Selector: exactly one of macroId, name+parentHeading, or name+index. plain body goes in CDATA (no HTML-escape of -->). Does not publish.',
+  {
+    filePath: z.string().describe('Absolute path to dumped storage XML'),
+    macroId: z.string().optional().describe('ac:macro-id'),
+    name: z.string().optional().describe('Macro name, e.g. mermaid-macro'),
+    parentHeading: z
+      .string()
+      .nullable()
+      .optional()
+      .describe('Nearest preceding heading text (with name)'),
+    index: z
+      .number()
+      .int()
+      .nonnegative()
+      .optional()
+      .describe('Index from listMacros (with name)'),
+    body: z.string().describe('New macro body'),
+    bodyKind: z
+      .enum(['plain', 'rich'])
+      .optional()
+      .describe('plain (default, CDATA) or rich (inner storage)'),
+    dryRun: z.boolean().optional().describe('Compute without writing the file'),
+  },
+  async (args) => {
+    try {
+      return ok(storageReplaceMacroBody(args.filePath, args));
     } catch (error) {
       return fail(error);
     }
