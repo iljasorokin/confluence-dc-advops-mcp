@@ -87,6 +87,39 @@ test('replaceMacroBody mermaid: CDATA is not HTML-escaped', () => {
   assert.equal(result.bodyCharsAfter, body.length);
 });
 
+test('getSection: no maxChars returns full body', () => {
+  const path = workCopy();
+  const long = 'x'.repeat(9000);
+  replaceSection(path, {
+    heading: 'Предметная область',
+    bodyFormat: 'markdown',
+    body: long,
+  });
+  const sec = getSection(path, {
+    heading: 'Предметная область',
+    format: 'text',
+  });
+  assert.equal(sec.truncated, false);
+  assert.ok(sec.body.length >= 9000);
+});
+
+test('getSection: maxChars truncates when set', () => {
+  const path = workCopy();
+  replaceSection(path, {
+    heading: 'Предметная область',
+    bodyFormat: 'markdown',
+    body: 'y'.repeat(500),
+  });
+  const sec = getSection(path, {
+    heading: 'Предметная область',
+    format: 'text',
+    maxChars: 100,
+  });
+  assert.equal(sec.truncated, true);
+  assert.equal(sec.chars, 100);
+  assert.equal(sec.body.length, 100);
+});
+
 test('ambiguous heading: error + candidates, file unchanged', () => {
   const path = workCopy();
   const before = readFileSync(path, 'utf8');

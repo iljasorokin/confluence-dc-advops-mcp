@@ -28,7 +28,7 @@
 | `confluence_getStorageToFile` | Выгрузить `body.storage` страницы в локальный XML (+ текущая version) |
 | `confluence_updateStorageFromFile` | Опубликовать storage XML из файла (автоинкремент version) |
 | `confluence_storage_listHeadings` | Заголовки в локальном storage-файле (без тел секций) |
-| `confluence_storage_getSection` | Одна секция: text / markdown / фрагмент storage (с лимитом) |
+| `confluence_storage_getSection` | Одна секция: text / markdown / фрагмент storage (опционально `maxChars`) |
 | `confluence_storage_replaceSection` | Заменить тело одной секции на диске (`dryRun`) |
 | `confluence_storage_listMacros` | Инвентарь макросов (без тел) |
 | `confluence_storage_replaceMacroBody` | Заменить тело одного макроса (напр. mermaid CDATA) |

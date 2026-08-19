@@ -1385,7 +1385,7 @@ function fail(error) {
 
 const server = new McpServer({
   name: 'confluence-dc-advops-mcp',
-  version: '1.9.0',
+  version: '1.9.1',
 });
 
 server.tool(
@@ -1844,9 +1844,8 @@ server.tool(
       .number()
       .int()
       .positive()
-      .max(8000)
       .optional()
-      .describe('Cap on returned body (default 4000, max 8000)'),
+      .describe('Optional cap on returned body. Omit to return the full section.'),
   },
   async (args) => {
     try {

@@ -28,7 +28,7 @@ Do **not** commit tokens or `*.env` files. See [SECURITY.md](./SECURITY.md).
 | `confluence_getStorageToFile` | Dump page `body.storage` to a local XML file (+ current version) |
 | `confluence_updateStorageFromFile` | Publish page storage XML from file (auto version bump) |
 | `confluence_storage_listHeadings` | Headings in a local storage file (no bodies) |
-| `confluence_storage_getSection` | One section as text / markdown / storage fragment (capped) |
+| `confluence_storage_getSection` | One section as text / markdown / storage fragment (optional `maxChars` cap) |
 | `confluence_storage_replaceSection` | Replace one section body on disk (`dryRun` supported) |
 | `confluence_storage_listMacros` | Macro inventory (no bodies) |
 | `confluence_storage_replaceMacroBody` | Replace one macro body (e.g. mermaid CDATA) |

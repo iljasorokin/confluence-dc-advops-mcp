@@ -7,8 +7,6 @@ import { parseDocument } from 'htmlparser2';
 import { markdownToStorage, escapeXml, decodeXmlEntities } from './markdown-storage.js';
 
 const HEADING_RE = /^h([1-6])$/i;
-const DEFAULT_MAX_CHARS = 4000;
-const HARD_MAX_CHARS = 8000;
 
 export function loadStorageFile(filePath) {
   if (!existsSync(filePath)) throw new Error(`File not found: ${filePath}`);
@@ -389,13 +387,17 @@ function storageToMarkdown(xmlFragment) {
   return out.join('').replace(/\n{3,}/g, '\n\n').trim();
 }
 
-function clampMaxChars(maxChars) {
-  const n = maxChars == null ? DEFAULT_MAX_CHARS : Number(maxChars);
-  if (!Number.isFinite(n) || n <= 0) return DEFAULT_MAX_CHARS;
-  return Math.min(Math.floor(n), HARD_MAX_CHARS);
+function resolveMaxChars(maxChars) {
+  if (maxChars == null) return null;
+  const n = Number(maxChars);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.floor(n);
 }
 
 function applyMax(text, maxChars, format) {
+  if (maxChars == null) {
+    return { body: text, truncated: false, chars: text.length };
+  }
   if (format === 'storage' && text.length > maxChars) {
     throw new Error(
       `section larger than maxChars (${text.length} > ${maxChars}), use format: text`,
@@ -410,7 +412,7 @@ function applyMax(text, maxChars, format) {
 export function getSection(filePath, opts = {}) {
   const includeHeading = opts.includeHeading !== false;
   const format = opts.format || 'text';
-  const maxChars = clampMaxChars(opts.maxChars);
+  const maxChars = resolveMaxChars(opts.maxChars);
   const { xml, filePath: fp, dom } = loadStorageFile(filePath);
   const headings = collectHeadings(dom);
   const heading = resolveHeading(headings, opts);
