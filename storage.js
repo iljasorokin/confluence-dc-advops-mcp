@@ -218,6 +218,23 @@ function collectMacros(dom, xml) {
   return { headings, macros, xml };
 }
 
+/** Expand is a collapsed rich-text wrapper (KTalk transcripts). Unwrap body; skip title param. */
+function isUnwrapMacro(node) {
+  return (attr(node, 'ac:name') || '').toLowerCase() === 'expand';
+}
+
+function eachMacroBody(node, fn) {
+  let found = false;
+  for (const child of node.children || []) {
+    const cn = tagName(child);
+    if (cn === 'ac:rich-text-body' || cn === 'ac:plain-text-body') {
+      fn(child);
+      found = true;
+    }
+  }
+  return found;
+}
+
 function storageToText(xmlFragment) {
   let dom;
   try {
@@ -267,6 +284,9 @@ function storageToText(xmlFragment) {
       return;
     }
     if (name === 'ac:structured-macro' || name === 'ac:macro') {
+      if (isUnwrapMacro(node) && eachMacroBody(node, (body) => emit(body.children))) {
+        return;
+      }
       out.push(`[macro: ${attr(node, 'ac:name') || name}]`);
       return;
     }
@@ -305,6 +325,11 @@ function storageToMarkdown(xmlFragment) {
     }
     if (name === 'br') return '  \n';
     if (name === 'ac:structured-macro' || name === 'ac:macro') {
+      if (isUnwrapMacro(node)) {
+        const parts = [];
+        eachMacroBody(node, (body) => parts.push(inlineMd(body.children)));
+        if (parts.length) return parts.join('');
+      }
       return `[macro: ${attr(node, 'ac:name') || name}]`;
     }
     if (name === 'ac:inline-comment-marker') return '';
@@ -378,6 +403,9 @@ function storageToMarkdown(xmlFragment) {
       return;
     }
     if (name === 'ac:structured-macro' || name === 'ac:macro') {
+      if (isUnwrapMacro(node) && eachMacroBody(node, (body) => emit(body.children))) {
+        return;
+      }
       out.push(`\n\n[macro: ${attr(node, 'ac:name') || name}]\n\n`);
       return;
     }

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, copyFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, copyFileSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -171,4 +171,42 @@ test('listMacros: no bodies, parentHeading, bodyKind', () => {
   assert.equal(expand.params.title, 'Скрыто');
   assert.equal(expand.bodyKind, 'rich');
   assert.ok(!('body' in mermaid));
+});
+
+test('getSection text unwraps expand and stubs other macros', () => {
+  const sec = getSection(FIXTURE, {
+    heading: 'Предметная область',
+    format: 'text',
+  });
+  assert.match(sec.body, /inside expand/);
+  assert.doesNotMatch(sec.body, /\[macro: expand\]/);
+  assert.doesNotMatch(sec.body, /Скрыто/);
+  assert.match(sec.body, /\[macro: mermaid-macro\]/);
+});
+
+test('getSection text: long expand body does not throw', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'storage-'));
+  const dest = join(dir, 'long-expand.xml');
+  const n = 1200;
+  const paras = Array.from(
+    { length: n },
+    (_, i) => `<p>Илья Сорокин: line ${i} ${'я'.repeat(48)}</p>`,
+  ).join('');
+  const xml = `<h2>Транскрипция встречи</h2>
+<ac:structured-macro ac:name="expand" ac:schema-version="1" ac:macro-id="e-long">
+<ac:parameter ac:name="title">Показать полную транскрипцию</ac:parameter>
+<ac:rich-text-body>${paras}</ac:rich-text-body>
+</ac:structured-macro>
+`;
+  writeFileSync(dest, xml, 'utf8');
+  let sec;
+  assert.doesNotThrow(() => {
+    sec = getSection(dest, { heading: 'Транскрипция встречи', format: 'text' });
+  });
+  assert.equal(sec.truncated, false);
+  assert.ok(sec.body.length > 50_000);
+  assert.match(sec.body, /line 0 /);
+  assert.match(sec.body, new RegExp(`line ${n - 1} `));
+  assert.doesNotMatch(sec.body, /\[macro: expand\]/);
+  assert.doesNotMatch(sec.body, /Показать полную транскрипцию/);
 });

@@ -1822,7 +1822,7 @@ server.tool(
 
 server.tool(
   'confluence_storage_getSection',
-  'Read one section from a local storage XML file (heading until next same-or-higher heading). Default format=text. Does not return the whole page. Ambiguous heading → error + candidates.',
+  'Read one section from a local storage XML file (heading until next same-or-higher heading). Default format=text. Does not return the whole page. Ambiguous heading → error + candidates. format=text/markdown inlines expand macro bodies (e.g. KTalk transcripts).',
   {
     filePath: z.string().describe('Absolute path to dumped storage XML'),
     heading: z.string().optional().describe('Exact heading text from listHeadings (whitespace-normalized)'),
