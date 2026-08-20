@@ -26,6 +26,7 @@ Do **not** commit tokens or `*.env` files. See [SECURITY.md](./SECURITY.md).
 | `confluence_reorderPage` | Sibling order / append: `above` \| `below` \| `append` via DC `movepage.action` |
 | `confluence_setChildPageOrder` | Exact full child order (permutation; sequential movepage) |
 | `confluence_getStorageToFile` | Dump page `body.storage` to a local XML file (+ current version) |
+| `confluence_resolveTinyUrl` | Tiny link `/x/{code}` → page id / title / space (no XML) |
 | `confluence_updateStorageFromFile` | Publish page storage XML from file (auto version bump) |
 | `confluence_storage_listHeadings` | Headings in a local storage file (no bodies) |
 | `confluence_storage_getSection` | One section as text / markdown / storage fragment (optional `maxChars` cap) |

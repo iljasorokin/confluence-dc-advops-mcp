@@ -12,6 +12,7 @@
  *   (Create from template copies template labels onto the new page)
  * - list / add / reply to page footer comments (quotes in body; no create-inline)
  * - list inline comments (open on page vs resolved) and reply in their threads
+ * - resolve Confluence tiny links (/x/…) to page id without stuffing XML into chat
  *
  * Auth/host: same as @atlassian-dc-mcp/confluence (local TLS proxy + keychain token).
  */
@@ -30,6 +31,7 @@ import {
   listMacros as storageListMacros,
   replaceMacroBody as storageReplaceMacroBody,
 } from './storage.js';
+import { resolveTinyInput } from './tinyurl.js';
 
 const ENV_FILE = join(homedir(), '.atlassian-dc-mcp', 'confluence.env');
 const KEYCHAIN_SERVICE = 'atlassian-dc-mcp';
@@ -960,6 +962,25 @@ async function setChildPageOrder({ parentId, childIds }) {
   };
 }
 
+async function resolveTinyUrl(input) {
+  const { code, contentId } = resolveTinyInput(input);
+  const page = await getPageMeta(contentId, 'version,space');
+  return {
+    input: String(input).trim(),
+    code,
+    id: String(page.id ?? contentId),
+    title: page.title,
+    type: page.type,
+    status: page.status,
+    version: page.version?.number,
+    spaceKey: page.space?.key,
+    tinyui: page._links?.tinyui ?? `/x/${code}`,
+    webui: page._links?.webui
+      ? `${resolveHost()}${page._links.webui}`
+      : undefined,
+  };
+}
+
 async function getStorageToFile(contentId, filePath) {
   const page = await getPageMeta(contentId);
   const storage = page.body?.storage?.value;
@@ -1385,7 +1406,7 @@ function fail(error) {
 
 const server = new McpServer({
   name: 'confluence-dc-advops-mcp',
-  version: '1.9.1',
+  version: '1.9.3',
 });
 
 server.tool(
@@ -1755,6 +1776,26 @@ server.tool(
   async (args) => {
     try {
       return ok(await setChildPageOrder(args));
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+server.tool(
+  'confluence_resolveTinyUrl',
+  'Resolve a Confluence tiny link (/x/{code} or bare code) to page id, title, space, version. Decodes locally then GET /content/{id} — does not follow tinyurl.action. Use before getContent / getStorageToFile when the user pasted a short URL.',
+  {
+    url: z
+      .string()
+      .min(1)
+      .describe(
+        'Full tiny URL (https://…/x/nf16Dw), path (/x/nf16Dw), bare code (nf16Dw), or tinyurl.action?urlIdentifier=…',
+      ),
+  },
+  async ({ url }) => {
+    try {
+      return ok(await resolveTinyUrl(url));
     } catch (error) {
       return fail(error);
     }

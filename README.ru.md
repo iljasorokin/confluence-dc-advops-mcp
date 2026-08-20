@@ -26,6 +26,7 @@
 | `confluence_reorderPage` | Порядок среди siblings / append: `above` \| `below` \| `append` через DC `movepage.action` |
 | `confluence_setChildPageOrder` | Точный полный порядок детей (permutation; последовательный movepage) |
 | `confluence_getStorageToFile` | Выгрузить `body.storage` страницы в локальный XML (+ текущая version) |
+| `confluence_resolveTinyUrl` | Tiny-ссылка `/x/{code}` → page id / title / space (без XML) |
 | `confluence_updateStorageFromFile` | Опубликовать storage XML из файла (автоинкремент version) |
 | `confluence_storage_listHeadings` | Заголовки в локальном storage-файле (без тел секций) |
 | `confluence_storage_getSection` | Одна секция: text / markdown / фрагмент storage (опционально `maxChars`) |

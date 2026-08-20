@@ -1,9 +1,9 @@
 {
   "name": "confluence-dc-advops-mcp",
-  "version": "1.9.2",
+  "version": "1.9.3",
   "private": true,
   "type": "module",
-  "description": "Local Confluence DC MCP: reparent, sibling reorder, file storage, surgical section/macro edits, attachments, labels, footer/inline comments, space template sync/delete (proxy auth)",
+  "description": "Local Confluence DC MCP: reparent, sibling reorder, file storage, surgical section/macro edits, attachments, labels, footer/inline comments, space template sync/delete, tiny URL resolve (proxy auth)",
   "bin": {
     "confluence-dc-advops-mcp": "./index.js"
   },
