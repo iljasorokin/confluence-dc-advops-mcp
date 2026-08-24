@@ -29,7 +29,7 @@
 | `confluence_resolveTinyUrl` | Tiny-ссылка `/x/{code}` → page id / title / space (без XML) |
 | `confluence_updateStorageFromFile` | Опубликовать storage XML из файла (автоинкремент version) |
 | `confluence_storage_listHeadings` | Заголовки в локальном storage-файле (без тел секций) |
-| `confluence_storage_getSection` | Одна секция: text / markdown / фрагмент storage (опционально `maxChars`) |
+| `confluence_storage_getSection` | Одна секция: text / markdown / фрагмент storage (опционально `maxChars`). См. [Ссылки в text/markdown](#ссылки-в-textmarkdown). |
 | `confluence_storage_replaceSection` | Заменить тело одной секции на диске (`dryRun`) |
 | `confluence_storage_listMacros` | Инвентарь макросов (без тел) |
 | `confluence_storage_replaceMacroBody` | Заменить тело одного макроса (напр. mermaid CDATA) |
@@ -75,6 +75,17 @@ Cloud-эндпоинт `PUT /rest/api/content/{id}/move/...` на DC **отсу�
 **Не** гонять всю страницу через Markdown (макросы и layout не восстановятся).
 
 Для **крошечных** страниц, которые не заготовки, — `user-confluence-dc` `confluence_updateContent`.
+
+### Ссылки в text/markdown
+
+В storage page-link часто лежит как пустой `ac:link` с целью только в атрибутах `ri:*` (UI подставляет title). `format: storage` не меняется. В `format: text` / `markdown` (и в заголовках, где только ссылка) конвертер подставляет label, чтобы агент не считал поле пустым:
+
+1. Сначала видимый текст якоря (`ac:plain-text-link-body` / `ac:link-body`); `ri:content-title` при этом не дублировать.
+2. Иначе первая цель: `ri:page` / `ri:blog-post` → `ri:content-title` и ` [spaceKey]`, если есть `ri:space-key`; `ri:url` → `ri:value`; `ri:attachment` → `ri:filename`; `ri:space` → key/name; `ri:user` → `[user]` (ФИО не выдумывать).
+3. Markdown: те же labels; для `ri:url` допустимо `[label](url)`. У page-link — голый title (без выдуманных `/wiki/…`).
+4. Без REST за title/id; без дефолтного space, если нет `ri:space-key`; tiny/`pageId` здесь не резолвятся.
+
+Тот же контракт, что у `user-confluence-dc` `confluence_getContent` с `bodyMode: text`. Макросы кроме `expand` в getSection text по-прежнему `[macro: …]` — тела внутри них не обходятся.
 
 ### Быстрый путь: страница → space template («Создать из шаблона»)
 

@@ -1,0 +1,6 @@
+<p>SRS: <ac:link><ri:page ri:content-title="CR-327-SRS-01 Пример" ri:space-key="TempStream" /></ac:link></p>
+<p>BDM: <ac:link><ri:page ri:content-title="BDM-773 Пример" /></ac:link></p>
+<p>С текстом: <ac:link><ri:page ri:content-title="Другой тайтл" /><ac:plain-text-link-body><![CDATA[как в UI]]></ac:plain-text-link-body></ac:link></p>
+<p>URL: <ac:link><ri:url ri:value="https://example.com/x" /></ac:link></p>
+<h2><ac:link><ri:page ri:content-title="Заголовок-ссылка" ri:space-key="Demo" /></ac:link></h2>
+<p>After heading.</p>

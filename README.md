@@ -29,7 +29,7 @@ Do **not** commit tokens or `*.env` files. See [SECURITY.md](./SECURITY.md).
 | `confluence_resolveTinyUrl` | Tiny link `/x/{code}` → page id / title / space (no XML) |
 | `confluence_updateStorageFromFile` | Publish page storage XML from file (auto version bump) |
 | `confluence_storage_listHeadings` | Headings in a local storage file (no bodies) |
-| `confluence_storage_getSection` | One section as text / markdown / storage fragment (optional `maxChars` cap) |
+| `confluence_storage_getSection` | One section as text / markdown / storage fragment (optional `maxChars` cap). See [Links in text/markdown](#links-in-textmarkdown). |
 | `confluence_storage_replaceSection` | Replace one section body on disk (`dryRun` supported) |
 | `confluence_storage_listMacros` | Macro inventory (no bodies) |
 | `confluence_storage_replaceMacroBody` | Replace one macro body (e.g. mermaid CDATA) |
@@ -62,6 +62,17 @@ These storage tools **do not publish** and **do not return** the full XML. Pytho
 Do **not** round-trip the whole page through Markdown (macros/layout will not survive).
 
 For **tiny** pages that are not templates, `user-confluence-dc` `confluence_updateContent` is still ok.
+
+### Links in text/markdown
+
+Confluence often stores page links as empty `ac:link` with the target only in `ri:*` attributes (UI fills the title). `format: storage` is unchanged. For `format: text` / `markdown` (and headings that are only a link), the converter fills a label so agents do not treat the field as empty:
+
+1. Prefer visible anchor text (`ac:plain-text-link-body` / `ac:link-body`); do not also append `ri:content-title`.
+2. Otherwise first target: `ri:page` / `ri:blog-post` → `ri:content-title` plus ` [spaceKey]` when `ri:space-key` is set; `ri:url` → `ri:value`; `ri:attachment` → `ri:filename`; `ri:space` → key/name; `ri:user` → `[user]` (no invented display name).
+3. Markdown: same labels; `ri:url` may become `[label](url)`. Page links stay bare titles (no invented `/wiki/…` URLs).
+4. No REST lookup of titles/ids; no default space when `ri:space-key` is missing; tiny/`pageId` not resolved here.
+
+Same contract as `user-confluence-dc` `confluence_getContent` with `bodyMode: text` (upstream mapper). Non-`expand` macros still appear as `[macro: …]` stubs in getSection text — bodies inside those macros are not walked.
 
 ### Fast path: page → space template (Create from template)
 

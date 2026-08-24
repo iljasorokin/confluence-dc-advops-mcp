@@ -40,14 +40,147 @@ function tagName(node) {
   return node?.type === 'tag' ? String(node.name || '') : '';
 }
 
+function attr(node, name) {
+  return node?.attribs?.[name] ?? node?.attribs?.[name.toLowerCase()];
+}
+
+/**
+ * Label for Confluence ac:link when the UI would show ri:* attributes
+ * instead of empty anchor text. Prefer explicit link body over attributes.
+ */
+function riTargetLabel(node) {
+  const name = tagName(node);
+  if (name === 'ri:page' || name === 'ri:blog-post') {
+    const title = attr(node, 'ri:content-title') || '';
+    if (!title) return '';
+    const space = attr(node, 'ri:space-key');
+    return space ? `${title} [${space}]` : title;
+  }
+  if (name === 'ri:space') {
+    return attr(node, 'ri:space-key') || attr(node, 'ri:space-name') || '';
+  }
+  if (name === 'ri:attachment') {
+    return attr(node, 'ri:filename') || '';
+  }
+  if (name === 'ri:url') {
+    return attr(node, 'ri:value') || '';
+  }
+  if (name === 'ri:user') {
+    return '[user]';
+  }
+  return '';
+}
+
+function linkBodyVisibleText(linkNode) {
+  const parts = [];
+  for (const child of linkNode.children || []) {
+    if (child.type === 'text' || child.type === 'cdata') {
+      parts.push(decodeXmlEntities(child.data || ''));
+      continue;
+    }
+    if (child.type !== 'tag') continue;
+    const name = tagName(child);
+    if (name.startsWith('ri:')) continue;
+    if (name === 'ac:plain-text-link-body' || name === 'ac:link-body') {
+      parts.push(visibleText(child));
+      continue;
+    }
+    parts.push(visibleText(child));
+  }
+  return parts.join('').replace(/\s+/g, ' ').trim();
+}
+
+function acLinkLabel(linkNode) {
+  const body = linkBodyVisibleText(linkNode);
+  if (body) return body;
+  for (const child of linkNode.children || []) {
+    if (child.type !== 'tag') continue;
+    const label = riTargetLabel(child);
+    if (label) return label;
+  }
+  return '';
+}
+
+function acLinkMarkdown(linkNode) {
+  const label = acLinkLabel(linkNode);
+  if (!label) return '';
+  for (const child of linkNode.children || []) {
+    if (tagName(child) !== 'ri:url') continue;
+    const href = attr(child, 'ri:value') || '';
+    if (href) return `[${label}](${href})`;
+  }
+  return label;
+}
+
+/**
+ * Regex expand for ac:link before naive tag-stripping (parse fallback / upstream text).
+ * Same contract as acLinkLabel: body text wins; else ri:* attributes.
+ */
+export function expandAcLinksInStorageXml(xml) {
+  return String(xml ?? '').replace(
+    /<ac:link\b[^>]*>([\s\S]*?)<\/ac:link>/gi,
+    (_full, inner) => {
+      const withCdata = String(inner).replace(
+        /<!\[CDATA\[([\s\S]*?)\]\]>/gi,
+        (_, text) => text,
+      );
+      const bodyText = decodeXmlEntities(
+        withCdata
+          .replace(/<ri:[^>]*>/gi, ' ')
+          .replace(/<[^>]+>/g, ' '),
+      )
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (bodyText) return bodyText;
+
+      const page = String(inner).match(
+        /<ri:(?:page|blog-post)\b([^>]*)\/?>/i,
+      );
+      if (page) {
+        const title = (page[1].match(/ri:content-title="([^"]*)"/i) || [])[1];
+        const space = (page[1].match(/ri:space-key="([^"]*)"/i) || [])[1];
+        if (title) {
+          const t = decodeXmlEntities(title);
+          return space ? `${t} [${space}]` : t;
+        }
+      }
+      const spaceOnly = String(inner).match(/<ri:space\b([^>]*)\/?>/i);
+      if (spaceOnly) {
+        const key =
+          (spaceOnly[1].match(/ri:space-key="([^"]*)"/i) || [])[1] ||
+          (spaceOnly[1].match(/ri:space-name="([^"]*)"/i) || [])[1];
+        if (key) return decodeXmlEntities(key);
+      }
+      const att = String(inner).match(/<ri:attachment\b([^>]*)\/?>/i);
+      if (att) {
+        const fn = (att[1].match(/ri:filename="([^"]*)"/i) || [])[1];
+        if (fn) return decodeXmlEntities(fn);
+      }
+      const url = String(inner).match(/<ri:url\b([^>]*)\/?>/i);
+      if (url) {
+        const val = (url[1].match(/ri:value="([^"]*)"/i) || [])[1];
+        if (val) return decodeXmlEntities(val);
+      }
+      if (/<ri:user\b/i.test(inner)) return '[user]';
+      return ' ';
+    },
+  );
+}
+
 function visibleText(node) {
   if (!node) return '';
-  if (node.type === 'text' || node.type === 'cdata') {
+  if (node.type === 'text') {
     return decodeXmlEntities(node.data || '');
+  }
+  if (node.type === 'cdata') {
+    const fromData = decodeXmlEntities(node.data || '');
+    if (fromData) return fromData;
+    return (node.children || []).map(visibleText).join('');
   }
   if (node.type !== 'tag') return '';
   const name = tagName(node);
   if (name === 'ac:inline-comment-marker') return '';
+  if (name === 'ac:link') return acLinkLabel(node);
   if (name === 'br') return ' ';
   return (node.children || []).map(visibleText).join('');
 }
@@ -150,10 +283,6 @@ export function listHeadings(filePath) {
   };
 }
 
-function attr(node, name) {
-  return node?.attribs?.[name] ?? node?.attribs?.[name.toLowerCase()];
-}
-
 function nodeTextContent(node) {
   if (!node) return '';
   if (node.type === 'text') return node.data || '';
@@ -235,7 +364,7 @@ function eachMacroBody(node, fn) {
   return found;
 }
 
-function storageToText(xmlFragment) {
+export function storageToText(xmlFragment) {
   let dom;
   try {
     dom = parseDocument(xmlFragment, {
@@ -243,7 +372,9 @@ function storageToText(xmlFragment) {
       decodeEntities: false,
     });
   } catch {
-    return decodeXmlEntities(xmlFragment.replace(/<[^>]+>/g, ' '));
+    return decodeXmlEntities(
+      expandAcLinksInStorageXml(xmlFragment).replace(/<[^>]+>/g, ' '),
+    );
   }
   const out = [];
   function emit(node) {
@@ -252,8 +383,14 @@ function storageToText(xmlFragment) {
       for (const n of node) emit(n);
       return;
     }
-    if (node.type === 'text' || node.type === 'cdata') {
+    if (node.type === 'text') {
       out.push(decodeXmlEntities(node.data || ''));
+      return;
+    }
+    if (node.type === 'cdata') {
+      const fromData = decodeXmlEntities(node.data || '');
+      if (fromData) out.push(fromData);
+      else emit(node.children);
       return;
     }
     if (node.type !== 'tag') return;
@@ -283,6 +420,10 @@ function storageToText(xmlFragment) {
       out.push('\n', cells.map((c) => visibleText(c).trim()).join(' | '));
       return;
     }
+    if (name === 'ac:link') {
+      out.push(acLinkLabel(node));
+      return;
+    }
     if (name === 'ac:structured-macro' || name === 'ac:macro') {
       if (isUnwrapMacro(node) && eachMacroBody(node, (body) => emit(body.children))) {
         return;
@@ -297,7 +438,7 @@ function storageToText(xmlFragment) {
   return out.join('').replace(/\n{3,}/g, '\n\n').trim();
 }
 
-function storageToMarkdown(xmlFragment) {
+export function storageToMarkdown(xmlFragment) {
   let dom;
   try {
     dom = parseDocument(xmlFragment, {
@@ -311,8 +452,13 @@ function storageToMarkdown(xmlFragment) {
   function inlineMd(node) {
     if (!node) return '';
     if (Array.isArray(node)) return node.map(inlineMd).join('');
-    if (node.type === 'text' || node.type === 'cdata') {
+    if (node.type === 'text') {
       return decodeXmlEntities(node.data || '');
+    }
+    if (node.type === 'cdata') {
+      const fromData = decodeXmlEntities(node.data || '');
+      if (fromData) return fromData;
+      return (node.children || []).map(inlineMd).join('');
     }
     if (node.type !== 'tag') return '';
     const name = tagName(node);
@@ -323,6 +469,7 @@ function storageToMarkdown(xmlFragment) {
       const href = attr(node, 'href') || '';
       return `[${inlineMd(node.children)}](${href})`;
     }
+    if (name === 'ac:link') return acLinkMarkdown(node);
     if (name === 'br') return '  \n';
     if (name === 'ac:structured-macro' || name === 'ac:macro') {
       if (isUnwrapMacro(node)) {

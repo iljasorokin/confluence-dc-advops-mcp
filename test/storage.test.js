@@ -10,9 +10,13 @@ import {
   replaceSection,
   listMacros,
   replaceMacroBody,
+  storageToText,
+  storageToMarkdown,
+  expandAcLinksInStorageXml,
 } from '../storage.js';
 
 const FIXTURE = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'page.xml');
+const LINKS = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'links.xml');
 
 function workCopy() {
   const dir = mkdtempSync(join(tmpdir(), 'storage-'));
@@ -209,4 +213,46 @@ test('getSection text: long expand body does not throw', () => {
   assert.match(sec.body, new RegExp(`line ${n - 1} `));
   assert.doesNotMatch(sec.body, /\[macro: expand\]/);
   assert.doesNotMatch(sec.body, /Показать полную транскрипцию/);
+});
+
+test('storageToText: empty-anchor page links use ri:content-title (+ space)', () => {
+  const text = storageToText(readFileSync(LINKS, 'utf8'));
+  assert.match(text, /SRS:\s*CR-327-SRS-01 Пример \[TempStream\]/);
+  assert.match(text, /BDM:\s*BDM-773 Пример/);
+  assert.match(text, /С текстом:\s*как в UI/);
+  assert.doesNotMatch(text, /Другой тайтл/);
+  assert.match(text, /URL:\s*https:\/\/example\.com\/x/);
+});
+
+test('storageToMarkdown: same labels; ri:url as markdown link', () => {
+  const md = storageToMarkdown(readFileSync(LINKS, 'utf8'));
+  assert.match(md, /SRS:\s*CR-327-SRS-01 Пример \[TempStream\]/);
+  assert.match(md, /BDM:\s*BDM-773 Пример/);
+  assert.match(md, /как в UI/);
+  assert.doesNotMatch(md, /Другой тайтл/);
+  assert.match(md, /\[https:\/\/example\.com\/x\]\(https:\/\/example\.com\/x\)/);
+});
+
+test('listHeadings: heading that is only ac:link gets title label', () => {
+  const { headings } = listHeadings(LINKS);
+  assert.ok(headings.some((h) => h.text === 'Заголовок-ссылка [Demo]'));
+});
+
+test('expandAcLinksInStorageXml: regex fallback same contract', () => {
+  const xml = readFileSync(LINKS, 'utf8');
+  const expanded = expandAcLinksInStorageXml(xml);
+  assert.match(expanded, /CR-327-SRS-01 Пример \[TempStream\]/);
+  assert.match(expanded, /BDM-773 Пример/);
+  assert.match(expanded, /как в UI/);
+  assert.doesNotMatch(expanded, /Другой тайтл/);
+  assert.match(expanded, /https:\/\/example\.com\/x/);
+});
+
+test('getSection text still stubs mermaid after link fix', () => {
+  const sec = getSection(FIXTURE, {
+    heading: 'Предметная область',
+    format: 'text',
+  });
+  assert.match(sec.body, /\[macro: mermaid-macro\]/);
+  assert.match(sec.body, /inside expand/);
 });
