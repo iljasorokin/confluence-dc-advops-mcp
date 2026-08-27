@@ -13,6 +13,7 @@
  * - list / add / reply to page footer comments (quotes in body; no create-inline)
  * - list inline comments (open on page vs resolved) and reply in their threads
  * - resolve Confluence tiny links (/x/…) to page id without stuffing XML into chat
+ * - list page versions (who/when/message) and dump a historical version to a local file
  *
  * Auth/host: same as @atlassian-dc-mcp/confluence (local TLS proxy + keychain token).
  */
@@ -32,6 +33,11 @@ import {
   replaceMacroBody as storageReplaceMacroBody,
 } from './storage.js';
 import { resolveTinyInput } from './tinyurl.js';
+import {
+  summarizeVersion,
+  buildVersionsListPath,
+  buildHistoricalContentPath,
+} from './versions.js';
 
 const ENV_FILE = join(homedir(), '.atlassian-dc-mcp', 'confluence.env');
 const KEYCHAIN_SERVICE = 'atlassian-dc-mcp';
@@ -981,18 +987,93 @@ async function resolveTinyUrl(input) {
   };
 }
 
-async function getStorageToFile(contentId, filePath) {
-  const page = await getPageMeta(contentId);
+/**
+ * List page version metadata (no bodies). Newest-first as returned by DC.
+ * Paginate with start/limit; optional maxResults caps how many rows to fetch.
+ */
+async function listVersions(contentId, { start = 0, limit = 50, maxResults } = {}) {
+  const pageLimit = Math.min(
+    200,
+    Math.max(1, Number.isFinite(Number(limit)) ? Number(limit) : 50),
+  );
+  let cursor = Math.max(0, Number.isFinite(Number(start)) ? Number(start) : 0);
+  const versions = [];
+  let totalSize;
+  const hardCap =
+    maxResults == null
+      ? Infinity
+      : Math.max(1, Number.isFinite(Number(maxResults)) ? Number(maxResults) : 1);
+
+  while (versions.length < hardCap) {
+    const batchLimit = Math.min(pageLimit, hardCap - versions.length);
+    const data = await confluenceApi(
+      'GET',
+      buildVersionsListPath(contentId, { start: cursor, limit: batchLimit }),
+    );
+    const batch = data.results || [];
+    if (data.totalSize != null) totalSize = data.totalSize;
+    for (const v of batch) {
+      versions.push(summarizeVersion(v));
+      if (versions.length >= hardCap) break;
+    }
+    const size = data.size ?? batch.length;
+    cursor += size;
+    if (!batch.length || size === 0) break;
+    if (data.totalSize != null && cursor >= data.totalSize) break;
+    // No more pages when we got a short batch
+    if (batch.length < batchLimit) break;
+  }
+
+  return {
+    id: String(contentId),
+    start: Math.max(0, Number(start) || 0),
+    limit: pageLimit,
+    count: versions.length,
+    ...(totalSize != null ? { totalSize } : {}),
+    versions,
+    note:
+      'Metadata only (no body). To inspect an old body: getStorageToFile with version=N, then storage_* on the file — do not dump XML into chat.',
+  };
+}
+
+async function getStorageToFile(contentId, filePath, version) {
+  let page;
+  let historical = false;
+  if (version == null) {
+    page = await getPageMeta(contentId);
+  } else {
+    historical = true;
+    page = await confluenceApi(
+      'GET',
+      buildHistoricalContentPath(contentId, version),
+    );
+  }
   const storage = page.body?.storage?.value;
   if (typeof storage !== 'string') {
-    throw new Error(`No body.storage for content ${contentId}`);
+    throw new Error(
+      historical
+        ? `No body.storage for content ${contentId} historical version ${version}`
+        : `No body.storage for content ${contentId}`,
+    );
   }
   mkdirSync(dirname(filePath), { recursive: true });
   writeFileSync(filePath, storage, 'utf8');
+  const ver = page.version || {};
   return {
     id: String(contentId),
     title: page.title,
-    version: page.version.number,
+    version: ver.number ?? version ?? null,
+    historical,
+    ...(historical
+      ? {
+          when: ver.when ?? null,
+          message: ver.message ?? '',
+          by: {
+            username: ver.by?.username ?? '',
+            displayName: ver.by?.displayName ?? '',
+          },
+        }
+      : {}),
     spaceKey: page.space?.key,
     filePath,
     bytes: Buffer.byteLength(storage, 'utf8'),
@@ -1406,7 +1487,7 @@ function fail(error) {
 
 const server = new McpServer({
   name: 'confluence-dc-advops-mcp',
-  version: '1.9.4',
+  version: '1.9.5',
 });
 
 server.tool(
@@ -1803,17 +1884,58 @@ server.tool(
 );
 
 server.tool(
+  'confluence_listVersions',
+  'List Confluence page version metadata (number, when, message, author). No bodies — use before getStorageToFile(version=N) when asking who changed what. Newest-first. Paginate with start/limit; maxResults caps total rows fetched.',
+  {
+    contentId: z.string().describe('Confluence page ID'),
+    start: z
+      .number()
+      .int()
+      .nonnegative()
+      .optional()
+      .describe('Pagination offset (default 0)'),
+    limit: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe('Page size per API call (default 50, max 200)'),
+    maxResults: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe('Stop after this many version rows (across pages)'),
+  },
+  async ({ contentId, start, limit, maxResults }) => {
+    try {
+      return ok(await listVersions(contentId, { start, limit, maxResults }));
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+server.tool(
   'confluence_getStorageToFile',
-  'Download Confluence page body.storage XML to a local file for surgical edits (large templates). Returns version/title/path. Prefer this over stuffing huge storage into chat.',
+  'Download Confluence page body.storage XML to a local file. Omit version for current; pass version=N for a historical snapshot (status=historical). Returns version/title/path (+ author when historical). Prefer this over stuffing huge storage into chat; then use storage_* on the file.',
   {
     contentId: z.string().describe('Confluence page ID'),
     filePath: z
       .string()
       .describe('Absolute path to write storage XML (e.g. /path/to/page.xml)'),
+    version: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe(
+        'Historical version number from listVersions. Omit for the current published version.',
+      ),
   },
-  async ({ contentId, filePath }) => {
+  async ({ contentId, filePath, version }) => {
     try {
-      return ok(await getStorageToFile(contentId, filePath));
+      return ok(await getStorageToFile(contentId, filePath, version));
     } catch (error) {
       return fail(error);
     }

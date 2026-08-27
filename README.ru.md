@@ -25,7 +25,8 @@
 | `confluence_listChildPages` | Прямые дочерние страницы + `position` в дереве |
 | `confluence_reorderPage` | Порядок среди siblings / append: `above` \| `below` \| `append` через DC `movepage.action` |
 | `confluence_setChildPageOrder` | Точный полный порядок детей (permutation; последовательный movepage) |
-| `confluence_getStorageToFile` | Выгрузить `body.storage` страницы в локальный XML (+ текущая version) |
+| `confluence_listVersions` | Метаданные версий страницы (кто / когда / message); без тел |
+| `confluence_getStorageToFile` | Выгрузить `body.storage` в локальный XML (текущая или `version=N` historical) |
 | `confluence_resolveTinyUrl` | Tiny-ссылка `/x/{code}` → page id / title / space (без XML) |
 | `confluence_updateStorageFromFile` | Опубликовать storage XML из файла (автоинкремент version) |
 | `confluence_storage_listHeadings` | Заголовки в локальном storage-файле (без тел секций) |
@@ -71,6 +72,12 @@ Cloud-эндпоинт `PUT /rest/api/content/{id}/move/...` на DC **отсу�
 7. Удалить временный файл
 
 Эти tools **не публикуют** и **не возвращают** полный XML. Python/`StrReplace` по dump — fallback, если кейс не покрыт.
+
+### Версии страницы (кто / когда — не полный blame)
+
+1. `confluence_listVersions` — только мета (`number`, `when`, `message`, `by`). Пагинация: `start` / `limit`; потолок: `maxResults`.
+2. Старое тело: `confluence_getStorageToFile` с `version: N` → XML на диск, затем `storage_getSection` / поиск по файлу. **Не** тащить historical XML в чат.
+3. Это не git-blame: автор версии = кто сохранил снимок; для «кто написал строку» — поиск фрагмента в dump.
 
 **Не** гонять всю страницу через Markdown (макросы и layout не восстановятся).
 

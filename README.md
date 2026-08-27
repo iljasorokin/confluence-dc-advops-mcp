@@ -25,7 +25,8 @@ Do **not** commit tokens or `*.env` files. See [SECURITY.md](./SECURITY.md).
 | `confluence_listChildPages` | Direct children + tree `position` |
 | `confluence_reorderPage` | Sibling order / append: `above` \| `below` \| `append` via DC `movepage.action` |
 | `confluence_setChildPageOrder` | Exact full child order (permutation; sequential movepage) |
-| `confluence_getStorageToFile` | Dump page `body.storage` to a local XML file (+ current version) |
+| `confluence_listVersions` | Page version metadata only (who / when / message); no bodies |
+| `confluence_getStorageToFile` | Dump page `body.storage` to a local XML file (current or `version=N` historical) |
 | `confluence_resolveTinyUrl` | Tiny link `/x/{code}` → page id / title / space (no XML) |
 | `confluence_updateStorageFromFile` | Publish page storage XML from file (auto version bump) |
 | `confluence_storage_listHeadings` | Headings in a local storage file (no bodies) |
@@ -58,6 +59,12 @@ Do **not** commit tokens or `*.env` files. See [SECURITY.md](./SECURITY.md).
 7. Delete the temp file
 
 These storage tools **do not publish** and **do not return** the full XML. Python/`StrReplace` on the dump is a fallback when they do not cover the case.
+
+### Page versions (who / when — not full blame)
+
+1. `confluence_listVersions` — metadata only (`number`, `when`, `message`, `by`). Paginate with `start` / `limit`; cap with `maxResults`.
+2. To inspect an old body: `confluence_getStorageToFile` with `version: N` → local XML, then `storage_getSection` / search on disk. Do **not** pull historical XML into chat.
+3. Not git-blame: a version author is who saved that snapshot; use snippet search on the dump for “who wrote this line”.
 
 Do **not** round-trip the whole page through Markdown (macros/layout will not survive).
 
