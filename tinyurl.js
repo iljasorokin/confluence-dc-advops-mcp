@@ -1,6 +1,8 @@
 /**
  * Confluence DC tiny links: /x/{code} encodes the page id as
- * URL-safe base64 of the little-endian integer (padding often omitted).
+ * little-endian uint32 → standard base64, then `/`→`-` and `+`→`_`
+ * (Atlassian KB, not RFC4648 base64url). Padding `=` is omitted.
+ * @see https://confluence.atlassian.com/confkb/how-to-programmatically-generate-the-tiny-link-of-a-confluence-page-956713432.html
  */
 
 const TINY_PATH_RE = /(?:^|\/)x\/([A-Za-z0-9_-]+)\/?(?:[?#].*)?$/;
@@ -35,6 +37,7 @@ export function extractTinyCode(input) {
 
 /**
  * Decode tiny code → numeric content id (string).
+ * Inverse of DC generation: `-`→`/`, `_`→`+`, standard base64, little-endian int.
  * @param {string} code
  * @returns {string}
  */
@@ -43,17 +46,20 @@ export function decodeTinyCode(code) {
   if (!TINY_CODE_RE.test(c)) {
     throw new Error(`Invalid tiny code: ${JSON.stringify(code)}`);
   }
-  const pad = c + '='.repeat((4 - (c.length % 4)) % 4);
+  // Official DC alphabet (KB): not RFC4648 base64url (`-` is `/`, `_` is `+`).
+  let b64 = c.replace(/-/g, '/').replace(/_/g, '+');
+  // Encode may drop a trailing 'A' before `=` padding; restore if needed.
+  while (b64.length % 4 === 1) b64 += 'A';
+  b64 += '='.repeat((4 - (b64.length % 4)) % 4);
   let buf;
   try {
-    buf = Buffer.from(pad, 'base64url');
+    buf = Buffer.from(b64, 'base64');
   } catch {
     throw new Error(`Invalid tiny code (base64): ${JSON.stringify(code)}`);
   }
   if (!buf.length || buf.length > 8) {
     throw new Error(`Invalid tiny code length for ${JSON.stringify(code)}`);
   }
-  // Little-endian unsigned int
   let id = 0n;
   for (let i = 0; i < buf.length; i++) {
     id |= BigInt(buf[i]) << BigInt(8 * i);
@@ -65,7 +71,7 @@ export function decodeTinyCode(code) {
 }
 
 /**
- * Swap `-` and `_` in a tiny code (DC tinyui vs RFC4648 base64url mismatch).
+ * Swap `-` and `_` (safety net if a client used RFC4648 base64url instead of DC alphabet).
  * @param {string} code
  * @returns {string}
  */

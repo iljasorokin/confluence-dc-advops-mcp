@@ -12,7 +12,7 @@
  *   (Create from template copies template labels onto the new page)
  * - list / add / reply to page footer comments (quotes in body; no create-inline)
  * - list inline comments (open on page vs resolved) and reply in their threads
- * - resolve Confluence tiny links (/x/…) to page id (decode, -↔_ swap on 404, tinyurl.action fallback)
+ * - resolve Confluence tiny links (/x/…) to page id (Atlassian DC base64, swap on 404, tinyurl.action fallback)
  * - list page versions (who/when/message) and dump a historical version to a local file
  *
  * Auth/host: same as @atlassian-dc-mcp/confluence (local TLS proxy + keychain token).
@@ -1510,7 +1510,7 @@ function fail(error) {
 
 const server = new McpServer({
   name: 'confluence-dc-advops-mcp',
-  version: '1.9.6',
+  version: '1.9.7',
 });
 
 server.tool(
@@ -1888,7 +1888,7 @@ server.tool(
 
 server.tool(
   'confluence_resolveTinyUrl',
-  'Resolve a Confluence tiny link (/x/{code} or bare code) to page id, title, space, version. Local decode then GET /content/{id}; on 404 retries with -↔_ swap in the code, then tinyurl.action. Returns resolvedVia (decode | decode-swapped | tinyurl-action). Use before getContent / getStorageToFile when the user pasted a short URL.',
+  'Resolve a Confluence tiny link (/x/{code} or bare code) to page id, title, space, version. Decodes with the DC alphabet (-→/, _→+; not RFC4648 base64url), GET /content/{id}; on 404 retries -↔_ swap, then tinyurl.action. Returns resolvedVia (decode | decode-swapped | tinyurl-action). Use before getContent / getStorageToFile when the user pasted a short URL.',
   {
     url: z
       .string()

@@ -27,7 +27,7 @@ Do **not** commit tokens or `*.env` files. See [SECURITY.md](./SECURITY.md).
 | `confluence_setChildPageOrder` | Exact full child order (permutation; sequential movepage) |
 | `confluence_listVersions` | Page version metadata only (who / when / message); no bodies |
 | `confluence_getStorageToFile` | Dump page `body.storage` to a local XML file (current or `version=N` historical) |
-| `confluence_resolveTinyUrl` | Tiny link `/x/{code}` → page id / title / space. Local decode; on 404 retries `-`↔`_` swap, then `tinyurl.action`. Returns `resolvedVia`. |
+| `confluence_resolveTinyUrl` | Tiny link `/x/{code}` → page id / title / space. DC base64 (`-`=`/`, `_`=`+`); on 404 swap then `tinyurl.action`. Returns `resolvedVia`. |
 | `confluence_updateStorageFromFile` | Publish page storage XML from file (auto version bump) |
 | `confluence_storage_listHeadings` | Headings in a local storage file (no bodies) |
 | `confluence_storage_getSection` | One section as text / markdown / storage fragment (optional `maxChars` cap). See [Links in text/markdown](#links-in-textmarkdown). |
@@ -83,14 +83,14 @@ Same contract as `user-confluence-dc` `confluence_getContent` with `bodyMode: te
 
 ### Tiny URLs (`/x/{code}`)
 
-DC `tinyui` can use `-` where RFC4648 base64url would use `_`. `confluence_resolveTinyUrl`:
+DC encodes pageId as little-endian uint32 → **standard** base64, then `/`→`-` and `+`→`_` ([Atlassian KB](https://confluence.atlassian.com/confkb/how-to-programmatically-generate-the-tiny-link-of-a-confluence-page-956713432.html)). This is **not** RFC4648 base64url. `confluence_resolveTinyUrl`:
 
-1. Local decode → `GET /content/{id}`.
-2. On **404**, retry decode with `-`↔`_` swapped in the code.
-3. If still 404, follow `pages/tinyurl.action?urlIdentifier={code}`.
+1. Decode with the DC alphabet → `GET /content/{id}`.
+2. On **404**, retry decode with `-`↔`_` swapped (codes produced by a base64url encoder).
+3. If still 404, follow `pages/tinyurl.action?urlIdentifier={code}` (undocumented; [CONFSERVER-102023](https://jira.atlassian.com/browse/CONFSERVER-102023)).
 4. Response includes `resolvedVia`: `decode` | `decode-swapped` | `tinyurl-action`.
 
-Use before `getContent` / `getStorageToFile` when the user pasted a short link — not CQL by title.
+Use before `getContent` / `getStorageToFile` when the user pasted a short link — not CQL by title. Anchors after the code (`/x/ZIAB#fragment`) are ignored.
 
 ### Fast path: page → space template (Create from template)
 

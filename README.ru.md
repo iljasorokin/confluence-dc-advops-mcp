@@ -27,7 +27,7 @@
 | `confluence_setChildPageOrder` | Точный полный порядок детей (permutation; последовательный movepage) |
 | `confluence_listVersions` | Метаданные версий страницы (кто / когда / message); без тел |
 | `confluence_getStorageToFile` | Выгрузить `body.storage` в локальный XML (текущая или `version=N` historical) |
-| `confluence_resolveTinyUrl` | Tiny `/x/{code}` → id / title / space. Decode; при 404 — swap `-`↔`_`, затем `tinyurl.action`. Поле `resolvedVia`. |
+| `confluence_resolveTinyUrl` | Tiny `/x/{code}` → id / title / space. Алфавит DC (`-`=`/`, `_`=`+`); при 404 — swap, затем `tinyurl.action`. Поле `resolvedVia`. |
 | `confluence_updateStorageFromFile` | Опубликовать storage XML из файла (автоинкремент version) |
 | `confluence_storage_listHeadings` | Заголовки в локальном storage-файле (без тел секций) |
 | `confluence_storage_getSection` | Одна секция: text / markdown / фрагмент storage (опционально `maxChars`). См. [Ссылки в text/markdown](#ссылки-в-textmarkdown). |
@@ -96,14 +96,14 @@ Cloud-эндпоинт `PUT /rest/api/content/{id}/move/...` на DC **отсу�
 
 ### Tiny URL (`/x/{code}`)
 
-В DC `tinyui` иногда содержит `-` там, где base64url ожидает `_`. `confluence_resolveTinyUrl`:
+DC кодирует pageId как little-endian uint32 → **обычный** base64, затем `/`→`-` и `+`→`_` ([KB Atlassian](https://confluence.atlassian.com/confkb/how-to-programmatically-generate-the-tiny-link-of-a-confluence-page-956713432.html)). Это **не** RFC4648 base64url. `confluence_resolveTinyUrl`:
 
-1. Локальный decode → `GET /content/{id}`.
-2. При **404** — повтор decode с swap `-`↔`_` в коде.
-3. Если снова 404 — `pages/tinyurl.action?urlIdentifier={code}`.
+1. Decode алфавитом DC → `GET /content/{id}`.
+2. При **404** — повтор с swap `-`↔`_` (коды от base64url-энкодера).
+3. Если снова 404 — `pages/tinyurl.action?urlIdentifier={code}` (недокументировано; [CONFSERVER-102023](https://jira.atlassian.com/browse/CONFSERVER-102023)).
 4. В ответе `resolvedVia`: `decode` | `decode-swapped` | `tinyurl-action`.
 
-Перед `getContent` / `getStorageToFile` при короткой ссылке — не CQL по title.
+Перед `getContent` / `getStorageToFile` при короткой ссылке — не CQL по title. Якорь после кода (`/x/ZIAB#fragment`) отбрасывается.
 
 ### Быстрый путь: страница → space template («Создать из шаблона»)
 
