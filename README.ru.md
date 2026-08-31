@@ -27,7 +27,7 @@
 | `confluence_setChildPageOrder` | Точный полный порядок детей (permutation; последовательный movepage) |
 | `confluence_listVersions` | Метаданные версий страницы (кто / когда / message); без тел |
 | `confluence_getStorageToFile` | Выгрузить `body.storage` в локальный XML (текущая или `version=N` historical) |
-| `confluence_resolveTinyUrl` | Tiny-ссылка `/x/{code}` → page id / title / space (без XML) |
+| `confluence_resolveTinyUrl` | Tiny `/x/{code}` → id / title / space. Decode; при 404 — swap `-`↔`_`, затем `tinyurl.action`. Поле `resolvedVia`. |
 | `confluence_updateStorageFromFile` | Опубликовать storage XML из файла (автоинкремент version) |
 | `confluence_storage_listHeadings` | Заголовки в локальном storage-файле (без тел секций) |
 | `confluence_storage_getSection` | Одна секция: text / markdown / фрагмент storage (опционально `maxChars`). См. [Ссылки в text/markdown](#ссылки-в-textmarkdown). |
@@ -93,6 +93,17 @@ Cloud-эндпоинт `PUT /rest/api/content/{id}/move/...` на DC **отсу�
 4. Без REST за title/id; без дефолтного space, если нет `ri:space-key`; tiny/`pageId` здесь не резолвятся.
 
 Тот же контракт, что у `user-confluence-dc` `confluence_getContent` с `bodyMode: text`. Макросы кроме `expand` в getSection text по-прежнему `[macro: …]` — тела внутри них не обходятся.
+
+### Tiny URL (`/x/{code}`)
+
+В DC `tinyui` иногда содержит `-` там, где base64url ожидает `_`. `confluence_resolveTinyUrl`:
+
+1. Локальный decode → `GET /content/{id}`.
+2. При **404** — повтор decode с swap `-`↔`_` в коде.
+3. Если снова 404 — `pages/tinyurl.action?urlIdentifier={code}`.
+4. В ответе `resolvedVia`: `decode` | `decode-swapped` | `tinyurl-action`.
+
+Перед `getContent` / `getStorageToFile` при короткой ссылке — не CQL по title.
 
 ### Быстрый путь: страница → space template («Создать из шаблона»)
 

@@ -65,6 +65,126 @@ export function decodeTinyCode(code) {
 }
 
 /**
+ * Swap `-` and `_` in a tiny code (DC tinyui vs RFC4648 base64url mismatch).
+ * @param {string} code
+ * @returns {string}
+ */
+export function swapDashUnderscore(code) {
+  return String(code ?? '')
+    .replace(/-/g, '\0')
+    .replace(/_/g, '-')
+    .replace(/\0/g, '_');
+}
+
+/**
+ * Decode candidates: primary code, then `-`↔`_` swap when applicable.
+ * @param {string} code bare tiny code (not full URL)
+ * @returns {Array<{ contentId: string, resolvedVia: 'decode' | 'decode-swapped', decodeCode: string }>}
+ */
+export function decodeTinyCodeCandidates(code) {
+  const c = String(code ?? '').trim();
+  const primaryId = decodeTinyCode(c);
+  const out = [{ contentId: primaryId, resolvedVia: 'decode', decodeCode: c }];
+  if (!/[-_]/.test(c)) return out;
+  const swappedCode = swapDashUnderscore(c);
+  if (swappedCode === c) return out;
+  const swappedId = decodeTinyCode(swappedCode);
+  if (swappedId !== primaryId) {
+    out.push({
+      contentId: swappedId,
+      resolvedVia: 'decode-swapped',
+      decodeCode: swappedCode,
+    });
+  }
+  return out;
+}
+
+/**
+ * Extract numeric page id from a Confluence redirect / view URL.
+ * @param {string} url
+ * @returns {string | null}
+ */
+export function parseContentIdFromLocation(url) {
+  const s = String(url ?? '');
+  const patterns = [
+    /[?&]pageId=(\d+)/i,
+    /\/content\/(\d+)(?:[/?#]|$)/i,
+    /\/wiki\/(?:spaces\/[^/]+\/pages\/|pages\/)(\d+)(?:[/?#]|$)/i,
+  ];
+  for (const re of patterns) {
+    const m = s.match(re);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+/**
+ * Resolve tiny URL → page metadata using injected lookups (for tests + index.js).
+ * @param {string} input
+ * @param {{
+ *   getPageById: (contentId: string) => Promise<object | null>,
+ *   followTinyUrl?: (code: string) => Promise<{ contentId: string } | null>,
+ * }} deps
+ */
+export async function resolveTinyUrlMeta(input, { getPageById, followTinyUrl }) {
+  const code = extractTinyCode(input);
+  const candidates = decodeTinyCodeCandidates(code);
+  let last404;
+
+  for (const cand of candidates) {
+    let page;
+    try {
+      page = await getPageById(cand.contentId);
+    } catch (err) {
+      if (isConfluence404(err)) {
+        last404 = err;
+        continue;
+      }
+      throw err;
+    }
+    if (page) {
+      return {
+        page,
+        code,
+        contentId: String(page.id ?? cand.contentId),
+        resolvedVia: cand.resolvedVia,
+      };
+    }
+  }
+
+  if (followTinyUrl) {
+    const action = await followTinyUrl(code);
+    if (action?.contentId) {
+      let page;
+      try {
+        page = await getPageById(action.contentId);
+      } catch (err) {
+        if (isConfluence404(err)) last404 = err;
+        else throw err;
+      }
+      if (page) {
+        return {
+          page,
+          code,
+          contentId: String(page.id ?? action.contentId),
+          resolvedVia: 'tinyurl-action',
+        };
+      }
+    }
+  }
+
+  if (last404) throw last404;
+  throw new Error(
+    `Could not resolve Confluence tiny code ${JSON.stringify(code)} (decode and tinyurl.action failed)`,
+  );
+}
+
+/** @param {unknown} err */
+export function isConfluence404(err) {
+  return err instanceof Error && /→ 404:/.test(err.message);
+}
+
+/**
  * @param {string} input URL, /x/code, or bare code
  * @returns {{ code: string, contentId: string }}
  */

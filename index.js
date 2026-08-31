@@ -12,7 +12,7 @@
  *   (Create from template copies template labels onto the new page)
  * - list / add / reply to page footer comments (quotes in body; no create-inline)
  * - list inline comments (open on page vs resolved) and reply in their threads
- * - resolve Confluence tiny links (/x/…) to page id without stuffing XML into chat
+ * - resolve Confluence tiny links (/x/…) to page id (decode, -↔_ swap on 404, tinyurl.action fallback)
  * - list page versions (who/when/message) and dump a historical version to a local file
  *
  * Auth/host: same as @atlassian-dc-mcp/confluence (local TLS proxy + keychain token).
@@ -32,7 +32,7 @@ import {
   listMacros as storageListMacros,
   replaceMacroBody as storageReplaceMacroBody,
 } from './storage.js';
-import { resolveTinyInput } from './tinyurl.js';
+import { resolveTinyUrlMeta, parseContentIdFromLocation } from './tinyurl.js';
 import {
   summarizeVersion,
   buildVersionsListPath,
@@ -968,11 +968,33 @@ async function setChildPageOrder({ parentId, childIds }) {
   };
 }
 
+async function followTinyUrlAction(code) {
+  const host = resolveHost();
+  const token = resolveToken();
+  const qs = new URLSearchParams({ urlIdentifier: code });
+  const path = `/pages/tinyurl.action?${qs.toString()}`;
+  const res = await fetch(`${host}${path}`, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${token}` },
+    redirect: 'follow',
+  });
+  if (!res.ok) return null;
+  const contentId = parseContentIdFromLocation(res.url);
+  if (contentId) return { contentId };
+  const text = await res.text();
+  const fromHtml = parseContentIdFromLocation(text);
+  if (fromHtml) return { contentId: fromHtml };
+  return null;
+}
+
 async function resolveTinyUrl(input) {
-  const { code, contentId } = resolveTinyInput(input);
-  const page = await getPageMeta(contentId, 'version,space');
+  const trimmed = String(input).trim();
+  const { page, code, contentId, resolvedVia } = await resolveTinyUrlMeta(trimmed, {
+    getPageById: (id) => getPageMeta(id, 'version,space'),
+    followTinyUrl: followTinyUrlAction,
+  });
   return {
-    input: String(input).trim(),
+    input: trimmed,
     code,
     id: String(page.id ?? contentId),
     title: page.title,
@@ -981,6 +1003,7 @@ async function resolveTinyUrl(input) {
     version: page.version?.number,
     spaceKey: page.space?.key,
     tinyui: page._links?.tinyui ?? `/x/${code}`,
+    resolvedVia,
     webui: page._links?.webui
       ? `${resolveHost()}${page._links.webui}`
       : undefined,
@@ -1487,7 +1510,7 @@ function fail(error) {
 
 const server = new McpServer({
   name: 'confluence-dc-advops-mcp',
-  version: '1.9.5',
+  version: '1.9.6',
 });
 
 server.tool(
@@ -1865,7 +1888,7 @@ server.tool(
 
 server.tool(
   'confluence_resolveTinyUrl',
-  'Resolve a Confluence tiny link (/x/{code} or bare code) to page id, title, space, version. Decodes locally then GET /content/{id} — does not follow tinyurl.action. Use before getContent / getStorageToFile when the user pasted a short URL.',
+  'Resolve a Confluence tiny link (/x/{code} or bare code) to page id, title, space, version. Local decode then GET /content/{id}; on 404 retries with -↔_ swap in the code, then tinyurl.action. Returns resolvedVia (decode | decode-swapped | tinyurl-action). Use before getContent / getStorageToFile when the user pasted a short URL.',
   {
     url: z
       .string()
