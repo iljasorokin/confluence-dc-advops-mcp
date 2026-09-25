@@ -179,7 +179,10 @@ function visibleText(node) {
   }
   if (node.type !== 'tag') return '';
   const name = tagName(node);
-  if (name === 'ac:inline-comment-marker') return '';
+  // Inline comment highlight wraps real page text — keep children, drop ac:ref only.
+  if (name === 'ac:inline-comment-marker') {
+    return (node.children || []).map(visibleText).join('');
+  }
   if (name === 'ac:link') return acLinkLabel(node);
   if (name === 'br') return ' ';
   return (node.children || []).map(visibleText).join('');
@@ -431,7 +434,11 @@ export function storageToText(xmlFragment) {
       out.push(`[macro: ${attr(node, 'ac:name') || name}]`);
       return;
     }
-    if (name === 'ac:inline-comment-marker') return;
+    // Highlight wrapper: emit inner text, ignore ac:ref metadata.
+    if (name === 'ac:inline-comment-marker') {
+      emit(node.children);
+      return;
+    }
     emit(node.children);
   }
   emit(dom.children || [dom]);
@@ -479,7 +486,10 @@ export function storageToMarkdown(xmlFragment) {
       }
       return `[macro: ${attr(node, 'ac:name') || name}]`;
     }
-    if (name === 'ac:inline-comment-marker') return '';
+    // Highlight wrapper: keep children, drop ac:ref.
+    if (name === 'ac:inline-comment-marker') {
+      return inlineMd(node.children);
+    }
     return inlineMd(node.children);
   }
   function emit(node) {

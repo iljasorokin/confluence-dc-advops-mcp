@@ -1510,7 +1510,7 @@ function fail(error) {
 
 const server = new McpServer({
   name: 'confluence-dc-advops-mcp',
-  version: '1.9.7',
+  version: '1.9.8',
 });
 
 server.tool(

@@ -79,7 +79,7 @@ Confluence often stores page links as empty `ac:link` with the target only in `r
 3. Markdown: same labels; `ri:url` may become `[label](url)`. Page links stay bare titles (no invented `/wiki/…` URLs).
 4. No REST lookup of titles/ids; no default space when `ri:space-key` is missing; tiny/`pageId` not resolved here.
 
-Same contract as `user-confluence-dc` `confluence_getContent` with `bodyMode: text` (upstream mapper). Non-`expand` macros still appear as `[macro: …]` stubs in getSection text — bodies inside those macros are not walked.
+Same contract as `user-confluence-dc` `confluence_getContent` with `bodyMode: text` (upstream mapper). Non-`expand` macros still appear as `[macro: …]` stubs in getSection text — bodies inside those macros are not walked. `ac:inline-comment-marker` (yellow highlight) is unwrapped: inner text is kept, `ac:ref` is not.
 
 ### Tiny URLs (`/x/{code}`)
 

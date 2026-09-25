@@ -256,3 +256,32 @@ test('getSection text still stubs mermaid after link fix', () => {
   assert.match(sec.body, /\[macro: mermaid-macro\]/);
   assert.match(sec.body, /inside expand/);
 });
+
+const INLINE_MARKERS = join(
+  dirname(fileURLToPath(import.meta.url)),
+  'fixtures',
+  'inline-comment-marker.xml',
+);
+
+test('storageToText: unwraps ac:inline-comment-marker, keeps highlighted text', () => {
+  const text = storageToText(readFileSync(INLINE_MARKERS, 'utf8'));
+  assert.match(text, /Кто\./);
+  assert.match(text, /US-03 — цель и ограничения/);
+  assert.match(text, /Кто \| аналитик/);
+  assert.doesNotMatch(text, /abc-1|ac:ref|inline-comment/);
+});
+
+test('storageToMarkdown: same unwrap for inline-comment-marker', () => {
+  const md = storageToMarkdown(readFileSync(INLINE_MARKERS, 'utf8'));
+  assert.match(md, /Кто\./);
+  assert.match(md, /US-03 — цель и ограничения/);
+  assert.doesNotMatch(md, /abc-2|ac:ref/);
+});
+
+test('listHeadings: heading text includes content inside inline-comment-marker', () => {
+  const { headings } = listHeadings(INLINE_MARKERS);
+  assert.ok(
+    headings.some((h) => h.text === 'US-03 — цель и ограничения'),
+    JSON.stringify(headings.map((h) => h.text)),
+  );
+});

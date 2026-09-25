@@ -92,7 +92,7 @@ Cloud-эндпоинт `PUT /rest/api/content/{id}/move/...` на DC **отсу�
 3. Markdown: те же labels; для `ri:url` допустимо `[label](url)`. У page-link — голый title (без выдуманных `/wiki/…`).
 4. Без REST за title/id; без дефолтного space, если нет `ri:space-key`; tiny/`pageId` здесь не резолвятся.
 
-Тот же контракт, что у `user-confluence-dc` `confluence_getContent` с `bodyMode: text`. Макросы кроме `expand` в getSection text по-прежнему `[macro: …]` — тела внутри них не обходятся.
+Тот же контракт, что у `user-confluence-dc` `confluence_getContent` с `bodyMode: text`. Макросы кроме `expand` в getSection text по-прежнему `[macro: …]` — тела внутри них не обходятся. `ac:inline-comment-marker` (жёлтая подсветка) разворачивается: внутренний текст остаётся, `ac:ref` нет.
 
 ### Tiny URL (`/x/{code}`)
 
