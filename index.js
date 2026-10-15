@@ -38,6 +38,7 @@ import {
   buildVersionsListPath,
   buildHistoricalContentPath,
 } from './versions.js';
+import { buildAttachmentUploadForm } from './attachment-form.js';
 
 const ENV_FILE = join(homedir(), '.atlassian-dc-mcp', 'confluence.env');
 const KEYCHAIN_SERVICE = 'atlassian-dc-mcp';
@@ -1263,6 +1264,15 @@ async function downloadAttachmentToFile({ contentId, attachmentId, filename, fil
   };
 }
 
+async function findExistingAttachmentByFilename(contentId, filename) {
+  const list = await listAttachments(contentId, { filename });
+  return (
+    list.find((a) => a.title === filename) ||
+    list.find((a) => String(a.title).toLowerCase() === String(filename).toLowerCase()) ||
+    null
+  );
+}
+
 async function uploadAttachmentFromFile({
   contentId,
   filePath,
@@ -1273,16 +1283,19 @@ async function uploadAttachmentFromFile({
   if (!existsSync(filePath)) throw new Error(`File not found: ${filePath}`);
   const name = filename || basename(filePath);
   const buf = readFileSync(filePath);
-  const form = new FormData();
-  form.append('file', new Blob([buf]), name);
-  if (comment) form.append('comment', comment);
-  form.append('minorEdit', String(Boolean(minorEdit)));
+  const form = buildAttachmentUploadForm({
+    buf,
+    filename: name,
+    comment,
+    minorEdit,
+  });
 
-  const res = await confluenceFetchRaw(
-    'POST',
-    `/rest/api/content/${contentId}/child/attachment`,
-    { body: form },
-  );
+  const existing = await findExistingAttachmentByFilename(contentId, name);
+  const path = existing
+    ? `/rest/api/content/${contentId}/child/attachment/${existing.id}/data`
+    : `/rest/api/content/${contentId}/child/attachment`;
+
+  const res = await confluenceFetchRaw('POST', path, { body: form });
   const text = await res.text();
   let data;
   try {
@@ -1290,12 +1303,23 @@ async function uploadAttachmentFromFile({
   } catch {
     data = { raw: text };
   }
+  // create → results[0]; update /data → attachment object (or results[0])
   const created = data?.results?.[0] || data;
+  const uploaded = summarizeAttachment(created);
+  if (comment != null && comment !== '' && uploaded.comment != null && uploaded.comment !== comment) {
+    throw new Error(
+      `Attachment comment charset mismatch: sent ${JSON.stringify(comment)}, ` +
+        `Confluence stored ${JSON.stringify(uploaded.comment)}. ` +
+        'Multipart comment part must use Content-Type: text/plain; charset=UTF-8.',
+    );
+  }
   return {
     contentId: String(contentId),
-    uploaded: summarizeAttachment(created),
+    uploaded,
     bytes: buf.length,
     filePath,
+    updatedExisting: Boolean(existing),
+    previousVersion: existing?.version?.number ?? null,
   };
 }
 
@@ -1510,7 +1534,7 @@ function fail(error) {
 
 const server = new McpServer({
   name: 'confluence-dc-advops-mcp',
-  version: '1.9.8',
+  version: '1.9.9',
 });
 
 server.tool(
@@ -1557,7 +1581,9 @@ server.tool(
 
 server.tool(
   'confluence_uploadAttachmentFromFile',
-  'Upload (or add a new version of) a local file as a page attachment via multipart POST /rest/api/content/{id}/child/attachment. Sets X-Atlassian-Token: no-check.',
+  'Upload a local file as a page attachment, or add a new version if the same filename already exists on the page. ' +
+    'New file: POST …/child/attachment. Existing name: POST …/child/attachment/{id}/data. ' +
+    'Comment multipart uses charset=UTF-8 (Cyrillic-safe). Sets X-Atlassian-Token: no-check.',
   {
     contentId: z.string().describe('Parent page ID'),
     filePath: z.string().describe('Absolute path to the local file to upload'),
@@ -1565,7 +1591,10 @@ server.tool(
       .string()
       .optional()
       .describe('Override attachment title (default: basename of filePath)'),
-    comment: z.string().optional().describe('Attachment comment'),
+    comment: z
+      .string()
+      .optional()
+      .describe('Attachment comment (UTF-8; Cyrillic supported)'),
     minorEdit: z
       .boolean()
       .optional()

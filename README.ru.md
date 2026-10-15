@@ -36,7 +36,7 @@
 | `confluence_storage_replaceMacroBody` | Заменить тело одного макроса (напр. mermaid CDATA) |
 | `confluence_listAttachments` | Список вложений страницы |
 | `confluence_downloadAttachmentToFile` | Скачать вложение в локальный файл |
-| `confluence_uploadAttachmentFromFile` | Загрузить / новую версию вложения из файла |
+| `confluence_uploadAttachmentFromFile` | Загрузить вложение или новую версию того же имени; comment в multipart с charset=UTF-8 |
 | `confluence_listComments` / `addComment` / `replyToComment` | Комментарии под страницей; цитату из текста — в теле (без создания inline) |
 | `confluence_listInlineComments` / `replyToInlineComment` | Читать inline (open / resolved) и отвечать в треде |
 | `confluence_listLabels` / `addLabels` / `removeLabels` / `setLabels` | Метки страницы (`global` / `my`) |

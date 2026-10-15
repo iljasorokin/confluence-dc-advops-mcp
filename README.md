@@ -36,7 +36,7 @@ Do **not** commit tokens or `*.env` files. See [SECURITY.md](./SECURITY.md).
 | `confluence_storage_replaceMacroBody` | Replace one macro body (e.g. mermaid CDATA) |
 | `confluence_listAttachments` | List attachments on a page |
 | `confluence_downloadAttachmentToFile` | Download attachment binary to a local file |
-| `confluence_uploadAttachmentFromFile` | Upload / new version of attachment from local file |
+| `confluence_uploadAttachmentFromFile` | Upload attachment or new version of same filename; comment uses UTF-8 charset in multipart |
 | `confluence_listComments` / `addComment` / `replyToComment` | Footer (page) comments; quote page text in the body (no inline create) |
 | `confluence_listInlineComments` / `replyToInlineComment` | Read inline comments (open vs resolved) and reply in thread |
 | `confluence_listLabels` / `addLabels` / `removeLabels` / `setLabels` | Page labels (`global` / `my`) |
